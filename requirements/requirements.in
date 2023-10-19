@@ -6,8 +6,8 @@
 
 # pytz==2023.3.post1  # 2023 Sep https://pypi.org/project/pytz/2023.3.post1/ # update IANA in base.py
 pytz
+coverage
 django
 pytest
 pytest-cov
 pytest-django
-coverage[toml]

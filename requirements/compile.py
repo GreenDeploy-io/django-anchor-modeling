@@ -17,30 +17,7 @@ if __name__ == "__main__":
         "--generate-hashes",
         "--allow-unsafe",
     ] + sys.argv[1:]
-    subprocess.run(
-        [
-            "python3.10",
-            *common_args,
-            "-P",
-            "Django>=4.0a1,<4.1",
-            "-o",
-            "py310-django40.txt",
-        ],
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        [
-            "python3.10",
-            *common_args,
-            "-P",
-            "Django>=4.1a1,<4.2",
-            "-o",
-            "py310-django41.txt",
-        ],
-        check=True,
-        capture_output=True,
-    )
+
     subprocess.run(
         [
             "python3.10",
@@ -61,18 +38,6 @@ if __name__ == "__main__":
             "Django>=5.0a1,<5.1",
             "-o",
             "py310-django50.txt",
-        ],
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        [
-            "python3.11",
-            *common_args,
-            "-P",
-            "Django>=4.1a1,<4.2",
-            "-o",
-            "py311-django41.txt",
         ],
         check=True,
         capture_output=True,
