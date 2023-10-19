@@ -73,9 +73,9 @@ jobs:
 
       - name: Combine coverage and fail if it's <100%
         run: |
-          python -m coverage combine --debug=trace
+          python -m coverage combine
           python -m coverage html --skip-covered --skip-empty
-          python -m coverage report --debug=trace
+          python -m coverage report --fail-under=100
 
       - name: Upload HTML report
         if: ${{ failure() }}
