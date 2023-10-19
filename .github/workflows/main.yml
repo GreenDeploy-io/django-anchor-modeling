@@ -40,6 +40,9 @@ jobs:
     - name: Run tox targets for ${{ matrix.python-version }}
       run: tox run -f py$(echo ${{ matrix.python-version }} | tr -d .)
 
+    - name: List files in current directory  # Debugging step to list files
+      run: ls -al
+
     - name: Upload coverage data
       uses: actions/upload-artifact@v3
       with:
@@ -64,6 +67,9 @@ jobs:
         uses: actions/download-artifact@v3
         with:
           name: coverage-data
+
+      - name: List files in downloaded artifact  # Debugging step to list files in downloaded artifact
+          run: ls -al
 
       - name: Combine coverage and fail if it's <100%
         run: |
