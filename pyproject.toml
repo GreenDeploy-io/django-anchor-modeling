@@ -15,8 +15,6 @@ addopts = """\
   --strict-config
   --strict-markers
   --ds=tests.settings
-  --cov=django_anchor_modeling
-  --cov=dataviewer
   """
 django_find_project = false
 # When set to false, pytest-django will not perform this search and
