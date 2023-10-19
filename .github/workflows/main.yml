@@ -69,7 +69,7 @@ jobs:
           name: coverage-data
 
       - name: List files in downloaded artifact  # Debugging step to list files in downloaded artifact
-          run: ls -al
+        run: ls -al
 
       - name: Combine coverage and fail if it's <100%
         run: |
