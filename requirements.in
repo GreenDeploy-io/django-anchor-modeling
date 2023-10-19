@@ -1,0 +1,7 @@
+# To update requirements.txt, run:
+#
+#    `source ~/.venv/django-anchor-modeling/bin/activate` to turn on venv if you haven't already
+#    `pip-compile requirements.in` to update requirements.txt
+#
+
+pytz==2023.3.post1  # 2023 Sep https://pypi.org/project/pytz/2023.3.post1/ # update IANA in base.py

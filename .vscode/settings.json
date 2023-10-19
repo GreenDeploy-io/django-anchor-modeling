@@ -12,10 +12,11 @@
       "source.fixAll": true
     }
   },
-  "ruff.args": [
+  "ruff.lint.args": [
       "--select=E,W,F,I001,PL",
       "--ignore=E203",
       "--per-file-ignores=**/__init__.py:F401"
   ],
-  "prettier.trailingComma": "none"
+  "prettier.trailingComma": "none",
+  "python.envFile": "${workspaceFolder}/.env"
 }
