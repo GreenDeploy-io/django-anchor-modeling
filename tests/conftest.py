@@ -22,6 +22,7 @@ def pytest_sessionstart(session):
             "django.contrib.sessions",
             "django.contrib.sites",
             "django_anchor_modeling",
+            "dataviewer",
             "tests.orders",
         ],
         SITE_ID=1,
