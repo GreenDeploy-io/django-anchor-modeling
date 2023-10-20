@@ -17,6 +17,7 @@ addopts = """\
   --ds=tests.settings
   """
 django_find_project = false
+pythonpath = ['.', 'src']
 # When set to false, pytest-django will not perform this search and
 # you'll have to specify the Django settings module yourself,
 # using either the --ds command line option (see above in addopts)

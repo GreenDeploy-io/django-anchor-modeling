@@ -2,6 +2,10 @@ import django
 from django.conf import settings
 from django.core.management import call_command
 
+# print("PYTHONPATH:", os.environ.get("PYTHONPATH", "Not set"))
+
+# print(sys.path)
+
 settings.configure(
     DEBUG=True,
     DATABASES={

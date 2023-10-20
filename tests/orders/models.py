@@ -4,8 +4,13 @@ from django_anchor_modeling.models import (
     AnchorNoBusinessId,
     AnchorWithBusinessId,
     StaticTie,
+    ZeroUpdateStrategyModel,
     static_attribute,
 )
+
+
+class RegularThreeNFModelUsingZeUS(ZeroUpdateStrategyModel):
+    name = models.CharField(max_length=100)
 
 
 class Business(AnchorNoBusinessId):

@@ -101,7 +101,6 @@ class ZeroUpdateStrategyModel(models.Model):
         self: The model instance.
         *args: Additional positional arguments.
         **kwargs: Additional keyword arguments.
-
     """
 
     objects = ZeroUpdateStrategyManager()
@@ -129,16 +128,15 @@ class ZeroUpdateStrategyModel(models.Model):
         Returns:
             None
         """
-        if hasattr(self, "avoid_recursion"):
+        if hasattr(self, "avoid_recursion") and self.avoid_recursion:
             super().save(*args, **kwargs)
             delattr(self, "avoid_recursion")
-        elif self.pk is not None and not hasattr(self, "created_via_manager"):
+        elif self.pk is not None and (
+            not hasattr(self, "created_via_manager") or not self.created_via_manager
+        ):
             field_names = [field.name for field in self._meta.get_fields()]
             filtered_dict = {k: v for k, v in self.__dict__.items() if k in field_names}
-            new_instance = type(self).objects.delete_and_create(
-                pk=self.pk, **filtered_dict
-            )
-            self.pk = new_instance.pk
+            type(self).objects.delete_and_create(pk=self.pk, **filtered_dict)
         else:
             super().save(*args, **kwargs)
 

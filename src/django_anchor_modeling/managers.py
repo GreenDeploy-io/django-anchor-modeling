@@ -82,6 +82,8 @@ class ZeroUpdateStrategyManager(models.Manager):
         instance.created_via_manager = True
         instance.avoid_recursion = True  # prevent recursion in save
         instance.save()
+        instance.created_via_manager = False
+        instance.avoid_recursion = False  # prevent recursion in save
         return instance
 
     def _extract_model_params(self, defaults, **kwargs):
