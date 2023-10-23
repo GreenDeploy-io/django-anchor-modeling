@@ -453,17 +453,24 @@ class AnchorNoBusinessId(ZeroUpdateStrategyModel):
 
 
 class KnotManager(models.Manager):
+    def get_all_caps_class_attributes(self):
+        return {
+            name: value
+            for name, value in vars(self.model).items()
+            if name.isupper()  # allows underscore
+        }
+
     def ensure_valid_keys_exist(self):
         model_cls = self.model
         model_name = model_cls.__name__
-        valid_keys = getattr(model_cls, "VALID_KEYS", None)
+        all_caps_attributes = self.get_all_caps_class_attributes()
 
-        if not valid_keys:
+        if not all_caps_attributes:
             raise ImproperlyConfigured(
-                f"'VALID_KEYS' must be defined and non-empty for {model_name}"
+                f"Need to define at least one ALL_CAPS class attribute for {model_name}"
             )
 
-        for key in valid_keys:
+        for key in all_caps_attributes:
             try:
                 _, created = model_cls.objects.get_or_create(pk=key)
                 if created:
@@ -476,7 +483,11 @@ class KnotManager(models.Manager):
                 raise
 
 
-class Knot(UndeletableModel):
+class Knot(UndeletableModel, models.TextChoices):
+    """
+    ref https://docs.djangoproject.com/en/4.2/ref/models/fields/#enumeration-types
+    """
+
     id = models.CharField(max_length=255, primary_key=True)
     is_active = models.BooleanField(default=True)
 
