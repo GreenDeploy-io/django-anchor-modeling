@@ -4,7 +4,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from django.db.models import Prefetch
 
-from metadata.models import BusinessToDataFieldMap
+from dataviewer.models import BusinessToDataFieldMap
 from metadata.services import create_change_with_reason
 
 
