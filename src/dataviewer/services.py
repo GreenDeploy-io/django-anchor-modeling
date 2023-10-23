@@ -100,6 +100,20 @@ def get_hydrated_anchor_based_on_data_map(
     Returns the hydrated instance
     """
 
+    queryset = get_hydrated_queryset_based_on_data_map(
+        {"id": anchor_pk}, main_model_class, field_model_map, fields
+    )
+    return queryset.first()
+
+
+def get_hydrated_queryset_based_on_data_map(
+    filter_parameter_and_values, main_model_class, field_model_map, fields
+):
+    """
+    This only works when the map follows BusinessToDataFieldMap.
+    Returns the hydrated instance
+    """
+
     select_related_fields = []
     prefetch_related_fields = []
     only_fields = []
@@ -120,7 +134,9 @@ def get_hydrated_anchor_based_on_data_map(
                 select_related_fields,
                 prefetch_related_fields,
             )
-            queryset = main_model_class.objects.only(*only_fields).filter(id=anchor_pk)
+            queryset = main_model_class.objects.only(*only_fields).filter(
+                **filter_parameter_and_values
+            )
 
     if select_related_fields:
         queryset = queryset.select_related(*select_related_fields)
@@ -128,7 +144,7 @@ def get_hydrated_anchor_based_on_data_map(
     if prefetch_related_fields:
         queryset = queryset.prefetch_related(*prefetch_related_fields)
 
-    return queryset.first()
+    return queryset
 
 
 def append_only_fields_get_model_class(model_info, main_model_class, only_fields):
