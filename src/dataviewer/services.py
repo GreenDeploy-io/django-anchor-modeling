@@ -190,6 +190,17 @@ def transform_hydrated_instance_into_dict(anchor, field_model_map, fields):
     return result
 
 
+def transform_many_hydrated_instances(anchors, field_model_map, fields):
+    result_list = []
+    for anchor in anchors:
+        result_dict = transform_hydrated_instance_into_dict(
+            anchor, field_model_map, fields
+        )
+        result_list.append(result_dict)
+
+    return result_list
+
+
 def append_result_with_right_data_in_field(anchor, model_info, field, result):
     field_name = model_info["field"]
     fetch_type = model_info.get("type")
