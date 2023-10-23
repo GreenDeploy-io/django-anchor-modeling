@@ -11,7 +11,10 @@ from .managers import (
     CompositeKeyManager,
     FromModelManager,
     HistorizedAttributeManager,
+    PrepareFilterManager,
     ZeroUpdateStrategyManager,
+    add_method_to_manager,
+    create_prepare_filter_manager,
 )
 
 
@@ -104,6 +107,7 @@ class ZeroUpdateStrategyModel(models.Model):
     """
 
     objects = ZeroUpdateStrategyManager()
+    filters = PrepareFilterManager()
 
     class Meta:
         abstract = True
@@ -333,6 +337,18 @@ def static_attribute(anchor_class, value_type, related_name="%(class)s_related")
         class Meta:
             abstract = True
 
+    # This block is inside static_attribute but outside StaticAttribute
+    if isinstance(value_type, models.ForeignKey):
+        # Dynamically set the manager method on the anchor class
+        # so can more easily get_by_parent_related_name
+        if hasattr(anchor_class, "filters"):
+            manager_instance = getattr(anchor_class, "filters")
+            add_method_to_manager(manager_instance.__class__, related_name)
+        else:
+            # create_custom_manager should be modified to accommodate this logic
+            custom_manager = create_prepare_filter_manager(related_name)
+            anchor_class.add_to_class("filters", custom_manager)
+
     return StaticAttribute
 
 
@@ -397,13 +413,15 @@ class StaticTie(CharFieldForCompositeKey, ZeroUpdateStrategyModel):
 
 class HistorizedTie(CharFieldForCompositeKey, FromModel):
     """
-    An abstract base class for a historized tie model that uses a composite key and supports historization.
+    An abstract base class for a historized tie model that uses a composite key
+    and supports historization.
 
     Attributes:
         objects (CompositeKeyManager): The manager for the model.
 
     Meta:
-        abstract (bool): Indicates that this model is abstract and cannot be instantiated.
+        abstract (bool): Indicates that this model is abstract
+            and cannot be instantiated.
 
     Example:
         ```python

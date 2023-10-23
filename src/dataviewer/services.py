@@ -107,7 +107,7 @@ def get_hydrated_anchor_based_on_data_map(
 
 
 def get_hydrated_queryset_based_on_data_map(
-    filter_parameter_and_values, main_model_class, field_model_map, fields
+    filter_parameter_and_values, main_model_class, field_model_map, fields=None
 ):
     """
     This only works when the map follows BusinessToDataFieldMap.
@@ -117,6 +117,9 @@ def get_hydrated_queryset_based_on_data_map(
     select_related_fields = []
     prefetch_related_fields = []
     only_fields = []
+
+    if fields is None:
+        fields = field_model_map.keys()
 
     for field in fields:
         if model_info := field_model_map.get(field):
@@ -163,11 +166,17 @@ def append_only_fields_get_model_class(model_info, main_model_class, only_fields
 
 
 def append_select_or_prefetch_related_fields(
-    field, model_info, model_class, select_related_fields, prefetch_related_fields
+    field,
+    model_info,
+    model_class,
+    select_related_fields,
+    prefetch_related_fields,
+    custom_filters=[],
 ):
     fetch_type = model_info.get("type")
     field_name = model_info["field"]
     order_by = model_info.get("order_by", "")
+
     if fetch_type == "select_related":
         select_related_fields.append(field_name)
     elif fetch_type == "prefetch_related":
@@ -177,11 +186,24 @@ def append_select_or_prefetch_related_fields(
             queryset=model_class.objects.only(field_name).order_by(order_by),
         )
         prefetch_related_fields.append(prefetch)
+
+    if model_info.get("is_related_field"):
+        lookup_type = model_info.get("related_lookup_type", "filter")
+        if custom_filter := model_info.get("custom_filter"):
+            custom_filters[custom_filter] = {
+                "field": field,
+                "lookup_type": lookup_type,
+                "model_class": model_class,
+                # other needed info
+            }
+
     return select_related_fields, prefetch_related_fields
 
 
-def transform_hydrated_instance_into_dict(anchor, field_model_map, fields):
+def transform_hydrated_instance_into_dict(anchor, field_model_map, fields=None):
     result = {}
+    if not fields:
+        fields = field_model_map.keys()
     for field in fields:
         if model_info := field_model_map.get(field):
             result = append_result_with_right_data_in_field(
@@ -191,14 +213,10 @@ def transform_hydrated_instance_into_dict(anchor, field_model_map, fields):
 
 
 def transform_many_hydrated_instances(anchors, field_model_map, fields):
-    result_list = []
-    for anchor in anchors:
-        result_dict = transform_hydrated_instance_into_dict(
-            anchor, field_model_map, fields
-        )
-        result_list.append(result_dict)
-
-    return result_list
+    return [
+        transform_hydrated_instance_into_dict(anchor, field_model_map, fields)
+        for anchor in anchors
+    ]
 
 
 def append_result_with_right_data_in_field(anchor, model_info, field, result):

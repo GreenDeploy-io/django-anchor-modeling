@@ -1,4 +1,5 @@
 import contextlib
+from typing import Union
 
 import pytz
 from django.conf import settings
@@ -12,6 +13,61 @@ from django.db import IntegrityError, models, transaction
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.utils import resolve_callables
 from django.utils import timezone
+
+
+# Higher-order function to generate manager methods
+def generate_get_by_parent_method(related_name: str):
+    def get_by_parent(self, parent_instance: Union[models.Model, int]):
+        filter_args_and_values = {f"{related_name}__value": parent_instance}
+        if isinstance(parent_instance, int):
+            filter_args_and_values = {f"{related_name}__value_id": parent_instance}
+        return filter_args_and_values
+
+    return get_by_parent
+
+
+def add_method_to_manager(manager, related_name):
+    def get_by_related_name(self, parent_instance: Union[models.Model, int]):
+        filter_args_and_values = {f"{related_name}__value": parent_instance}
+        if isinstance(parent_instance, int):
+            filter_args_and_values = {f"{related_name}__value_id": parent_instance}
+        return filter_args_and_values
+
+    setattr(manager, f"get_by_{related_name}", get_by_related_name)
+
+
+def create_prepare_filter_manager(related_name):
+    class PrepareFilterManager(models.Manager):
+        def get_by_related_name(self, parent_instance: Union[models.Model, int]):
+            filter_args_and_values = {f"{related_name}__value": parent_instance}
+            if isinstance(parent_instance, int):
+                filter_args_and_values = {f"{related_name}__value_id": parent_instance}
+            return filter_args_and_values
+
+    return PrepareFilterManager()
+
+
+# class BusinessEventFiltersManager(models.Manager):
+#     """
+#     This is to generate dynamic filter_args_and_values for BusinessEvent
+#     such as {related_name_of_parent__value: parent_instance}
+#     or {related_name_of_parent__value_id: parent_instance.pk}
+#     """
+
+#     pass
+#
+#
+# After the parent is craeted by way of static_attribute
+# then we do
+# # as parent filtering the child by parent is a common query
+# Attach the dynamically generated method to the manager
+# BusinessEventFiltersManager.get_by_work_scope = generate_get_by_parent_method(
+#     "parent_work_scope"
+# )
+
+
+class PrepareFilterManager(models.Manager):
+    pass
 
 
 class ZeroUpdateStrategyManager(models.Manager):
