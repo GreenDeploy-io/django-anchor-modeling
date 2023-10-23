@@ -4,9 +4,8 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from django.db.models import Prefetch
 
-from domains.metadata.services import create_change_with_reason
-
-from .models import BusinessToDataFieldMap
+from metadata.models import BusinessToDataFieldMap
+from metadata.services import create_change_with_reason
 
 
 def get_model_class(model_name):

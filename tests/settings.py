@@ -7,6 +7,7 @@ from __future__ import annotations
 INSTALLED_APPS = [
     "django_anchor_modeling",
     "dataviewer",
+    "metadata",
     "tests.orders",
 ]
 

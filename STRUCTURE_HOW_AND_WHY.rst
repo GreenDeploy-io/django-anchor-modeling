@@ -1,0 +1,1 @@
+https://pytest-django.readthedocs.io/en/latest/managing_python_path.html#example-project-with-src-layout
