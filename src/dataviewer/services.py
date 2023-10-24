@@ -40,6 +40,16 @@ def get_biz_to_data_field_map(key):
     return field_model_map
 
 
+# {
+#     "id": {"field": "id", "model": "BusinessEvent"},
+#     "name": {
+#         "type": "prefetch_related",
+#         "field": "value",
+#         "model": "HistorizedBusinessEventName",
+#         "order_by": "-from_epoch",
+#         "related_name": "name",
+#     },
+# }
 def create_biz_to_data_field_map(key, field_model_map, description=""):
     """
     Example:
@@ -60,7 +70,10 @@ def create_biz_to_data_field_map(key, field_model_map, description=""):
         )
         if not created:
             raise ValueError(
-                f"BusinessToDataFieldMap with id {key} already exists. Use delete_and_create_biz_to_data_field_map instead."
+                (
+                    f"BusinessToDataFieldMap with id {key} already exists. "
+                    "Use delete_and_create_biz_to_data_field_map instead."
+                )
             )
         return obj
 
@@ -166,13 +179,12 @@ def append_only_fields_get_model_class(model_info, main_model_class, only_fields
 
 
 def append_select_or_prefetch_related_fields(
-    field,
-    model_info,
-    model_class,
-    select_related_fields,
-    prefetch_related_fields,
-    custom_filters=[],
+    field, model_info, model_class, select_related_fields, prefetch_related_fields
 ):
+    """
+    using field, model_info, model_class to update
+    select_related_fields and prefetch_related_fields
+    """
     fetch_type = model_info.get("type")
     field_name = model_info["field"]
     order_by = model_info.get("order_by", "")
@@ -186,16 +198,6 @@ def append_select_or_prefetch_related_fields(
             queryset=model_class.objects.only(field_name).order_by(order_by),
         )
         prefetch_related_fields.append(prefetch)
-
-    if model_info.get("is_related_field"):
-        lookup_type = model_info.get("related_lookup_type", "filter")
-        if custom_filter := model_info.get("custom_filter"):
-            custom_filters[custom_filter] = {
-                "field": field,
-                "lookup_type": lookup_type,
-                "model_class": model_class,
-                # other needed info
-            }
 
     return select_related_fields, prefetch_related_fields
 
