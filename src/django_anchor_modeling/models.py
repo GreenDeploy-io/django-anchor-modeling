@@ -453,43 +453,46 @@ class AnchorNoBusinessId(ZeroUpdateStrategyModel):
 
 
 class KnotManager(models.Manager):
-    def get_all_caps_class_attributes(self):
-        return {
-            name: value
-            for name, value in vars(self.model).items()
-            if name.isupper()  # allows underscore
-        }
-
-    def ensure_valid_keys_exist(self):
+    def ensure_choices_exist(self):
         model_cls = self.model
         model_name = model_cls.__name__
-        all_caps_attributes = self.get_all_caps_class_attributes()
-
-        if not all_caps_attributes:
+        textchoices_inner_class = getattr(model_cls, "TextChoices", None)
+        if textchoices_inner_class is None:
             raise ImproperlyConfigured(
-                f"Need to define at least one ALL_CAPS class attribute for {model_name}"
+                f"Need to define TextChoices inner class for {model_name}"
+            )
+        choices = getattr(textchoices_inner_class, "choices", {})
+
+        if not choices:
+            raise ImproperlyConfigured(
+                "Need to define at least one choice using ALL_CAPS class attribute ",
+                f"for {model_name}.TextChoices",
             )
 
-        for key in all_caps_attributes:
+        for value, label in choices:
             try:
-                _, created = model_cls.objects.get_or_create(pk=key)
+                _, created = model_cls.objects.get_or_create(pk=value, label=label)
                 if created:
-                    print(f"Created {model_name} with pk {key}")
+                    print(f"Created {model_name} with pk {value}, label {label}")
                 else:
-                    print(f"{model_name} with pk {key} already exists")
+                    print(f"{model_name} with pk {value}, label {label} already exists")
             except IntegrityError:
-                print(f"Could not create {model_name} with pk {key}. IntegrityError.")
+                print(f"Could not create {model_name} with pk {value}. IntegrityError.")
                 # re-raise the exception
                 raise
 
 
-class Knot(UndeletableModel, models.TextChoices):
+class Knot(UndeletableModel):
     """
     ref https://docs.djangoproject.com/en/4.2/ref/models/fields/#enumeration-types
     """
 
     id = models.CharField(max_length=255, primary_key=True)
+    label = models.CharField(max_length=255)
     is_active = models.BooleanField(default=True)
+
+    class TextChoices(models.TextChoices):
+        pass
 
     objects = KnotManager()
 

@@ -21,6 +21,8 @@ settings.configure(
         "django.contrib.sessions",
         "django.contrib.messages",
         "django_anchor_modeling",
+        "dataviewer",
+        "metadata",
         "tests.orders",
     ),
     # Add other required settings here
@@ -30,3 +32,5 @@ settings.configure(
 django.setup()
 
 call_command("makemigrations", "orders")
+call_command("makemigrations", "metadata")
+call_command("makemigrations", "dataviewer")

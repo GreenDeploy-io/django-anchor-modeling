@@ -1,0 +1,4 @@
+when {"id": {"field": "id", "model": "BusinessEvent"}, "name": {"type": "prefetch_related", "field": "value", "model": "HistorizedBusinessEventName", "order_by": "-from_epoch", "related_name": "name"}, "parent_work_scope": {"field": "value", "model": "BusinessEventWorkScope", "is_related_field": true}}
+
+then those that are is_related_field, will return as None at the dict level
+

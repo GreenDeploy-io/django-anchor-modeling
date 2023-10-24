@@ -3,6 +3,7 @@ from django.db import models
 from django_anchor_modeling.models import (
     AnchorNoBusinessId,
     AnchorWithBusinessId,
+    Knot,
     StaticTie,
     ZeroUpdateStrategyModel,
     static_attribute,
@@ -70,3 +71,21 @@ StaticAttributeForOrderLineItemProduct = static_attribute(
 
 class OrderLineItemProduct(StaticAttributeForOrderLineItemProduct):
     pass
+
+
+class OrderType(Knot):
+    class TextChoices(models.TextChoices):
+        REQUEST = "REQUEST", "Request"
+        QUOTATION = "QUOTATION", "Quotation"
+        PURCHASE_ORDER = "PURCHASE_ORDER", "Purchase Order"
+        ACCEPTANCE_PAPER = "ACCEPTANCE_PAPER", "Acceptance Paper"
+        INVOICE = "INVOICE", "Invoice"
+
+
+class OrderTypeWithoutTextChoices(Knot):
+    pass
+
+
+class OrderTypeTextChoicesNoChoices(Knot):
+    class TextChoices(models.TextChoices):
+        pass

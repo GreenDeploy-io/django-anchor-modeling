@@ -51,6 +51,13 @@ def main(args):
 
 
 def run_main(env_name, pytest_args, verbose_mode):
+    """
+    how to run
+
+    `python .infrastructure/pytest.py --verbose_mode 2 run -- py310-django42 -s `
+
+    anything after -- is for run and not pytest.py itself
+    """
     print_yellow_when_verbose_basic(
         "Setting COVERAGE_FILE as environment variable", verbose_mode
     )
