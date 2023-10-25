@@ -1,5 +1,6 @@
 import glob
 import os
+import shutil
 from enum import Enum
 from importlib.metadata import distribution
 
@@ -71,9 +72,9 @@ def list_and_remove(pattern, description, is_file=True, exclude_list=None):
             if is_file:
                 os.remove(item)
             else:
-                os.rmdir(
+                shutil.rmtree(
                     item
-                )  # This will remove an empty directory; for non-empty directories, you'll need to use shutil.rmtree
+                )  # os.rmdir will remove an empty directory; for non-empty directories, you'll need to use shutil.rmtree
 
         print_colored(f"Deleted all {description}.", 92)  # Green text
     else:

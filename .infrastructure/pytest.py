@@ -129,27 +129,6 @@ def open_latest_coverage_report():
     webbrowser.open(f"file://{os.getcwd()}/{latest_folder}/index.html")
 
 
-# def remove_htmlcov_folders():
-#     htmlcov_folders = glob.glob("htmlcov*")
-#     if not htmlcov_folders:
-#         print("\033[93mNo htmlcov* folders found.\033[0m")  # Yellow text
-#         return
-
-#     print("Found the following htmlcov* folders:")
-#     for folder in htmlcov_folders:
-#         print(f"\033[93m- {folder}\033[0m")  # Yellow text
-#     response = (
-#         input("\033[91mDelete these folders? [Y/n]: \033[0m").strip().lower()
-#     )  # Red text
-
-#     if response in ["", "y", "yes"]:
-#         for folder in htmlcov_folders:
-#             shutil.rmtree(folder)
-#         print("\033[92mDeleted all htmlcov* folders.\033[0m")  # Green text
-#     else:
-#         print("\033[92mAborted. No folders were deleted.\033[0m")  # Green text
-
-
 def parse_args():
     parser = argparse.ArgumentParser(
         description="1. Turn on your preferred virtual environment for developing this package.\n"

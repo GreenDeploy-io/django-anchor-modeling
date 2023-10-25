@@ -25,7 +25,7 @@ class Product(AnchorWithBusinessId):
 StaticAttributeForProductSeller = static_attribute(
     anchor_class=Product,
     value_type=models.ForeignKey(Business, on_delete=models.CASCADE),
-    related_name="products",
+    related_name="parent_seller",
 )
 
 

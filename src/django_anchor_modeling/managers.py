@@ -15,17 +15,6 @@ from django.db.models.utils import resolve_callables
 from django.utils import timezone
 
 
-# Higher-order function to generate manager methods
-def generate_get_by_parent_method(related_name: str):
-    def get_by_parent(self, parent_instance: Union[models.Model, int]):
-        filter_args_and_values = {f"{related_name}__value": parent_instance}
-        if isinstance(parent_instance, int):
-            filter_args_and_values = {f"{related_name}__value_id": parent_instance}
-        return filter_args_and_values
-
-    return get_by_parent
-
-
 def add_method_to_manager(manager, related_name):
     def get_by_related_name(self, parent_instance: Union[models.Model, int]):
         filter_args_and_values = {f"{related_name}__value": parent_instance}
@@ -61,9 +50,6 @@ def create_prepare_filter_manager(related_name):
 # then we do
 # # as parent filtering the child by parent is a common query
 # Attach the dynamically generated method to the manager
-# BusinessEventFiltersManager.get_by_work_scope = generate_get_by_parent_method(
-#     "parent_work_scope"
-# )
 
 
 class PrepareFilterManager(models.Manager):
