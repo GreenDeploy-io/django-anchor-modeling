@@ -89,3 +89,20 @@ class OrderTypeWithoutTextChoices(Knot):
 class OrderTypeTextChoicesNoChoices(Knot):
     class TextChoices(models.TextChoices):
         pass
+
+
+class ProductIsUnderWhatType(Knot):
+    class TextChoices(models.TextChoices):
+        ORDERS__ORDER = "ORDERS__ORDER", "Order"
+        ORDERS__ORDER_LINE_ITEM = "ORDERS__ORDER_LINE_ITEM", "Order Line Item"
+
+
+class ProductIsUnderWhat(StaticTie):
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="is_under"
+    )
+    under_what_id = models.PositiveIntegerField()
+    under_what_type = models.CharField(
+        max_length=100, choices=ProductIsUnderWhatType.TextChoices.choices
+    )
+    composite_key_fields = ("product", "under_what_id", "under_what_type")

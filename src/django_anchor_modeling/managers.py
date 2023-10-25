@@ -342,17 +342,18 @@ class CompositeKeyManager(ZeroUpdateStrategyManager):
             )
             raise ImproperlyConfigured(error_message)
 
-        foreign_keys = [
-            field
-            for field in composite_key_fields_fields
-            if isinstance(instance._meta.get_field(field), models.ForeignKey)
-        ]
-
         composite_key_parts = []
-        for fk in foreign_keys:
-            fk_value = getattr(instance, f"{fk}_id", None)
-            if fk_value is not None:
-                composite_key_parts.append(str(fk_value))
+        for field in composite_key_fields_fields:
+            field_type = instance._meta.get_field(field)
+
+            if isinstance(field_type, models.ForeignKey):
+                fk_value = getattr(instance, f"{field}_id", None)
+                if fk_value is not None:
+                    composite_key_parts.append(str(fk_value))
+            elif isinstance(field_type, (models.CharField, models.IntegerField)):
+                value = getattr(instance, field, None)
+                if value is not None:
+                    composite_key_parts.append(str(value))
 
         return ".".join(composite_key_parts)
 
@@ -376,12 +377,13 @@ class CompositeKeyManager(ZeroUpdateStrategyManager):
         try:
             with transaction.atomic():
                 instance = self.model(**kwargs)
-                instance.id = self.create_composite_key(instance)
+                # IMPT!! must use pk and not id to save
+                kwargs["pk"] = self.create_composite_key(instance)
                 return super().create(**kwargs)
         except IntegrityError as e:
-            if "unique constraint" in str(e).lower() and "id" in str(e).lower():
+            if "unique constraint" in str(e).lower() and "pk" in str(e).lower():
                 raise ValidationError(
-                    f"A record with the composite key {instance.id} already exists."
+                    f"A record with the composite key {kwargs['pk']} already exists."
                 ) from e
             raise  # Re-raise the original exception if it wasn't due to id uniqueness
 
