@@ -106,7 +106,7 @@ def cache_biz_to_data_field_map(key, model_dot_map=None):
 
 
 def get_hydrated_anchor_based_on_data_map(
-    anchor_pk, main_model_class, field_model_map, fields
+    anchor_pk, main_model_class, field_model_map, fields=None
 ):
     """
     This only works when the map follows BusinessToDataFieldMap.
