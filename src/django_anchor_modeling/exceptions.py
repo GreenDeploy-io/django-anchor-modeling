@@ -28,3 +28,16 @@ class MissingTransactionInModelError(CustomTransactionExceptionWithCode):
 
 class SentinelTransactionCannotBeUsedError(CustomTransactionExceptionWithCode):
     code = "TE004"
+
+
+class CustomTransactionBackedExceptionWithCode(PermissionDenied):
+    code = None
+
+    def __init__(self, message, *args, **kwargs):
+        if self.code is not None:
+            message = f"[{self.code}] {message}"
+        super().__init__(message, *args, **kwargs)
+
+
+class NotAnAnchorError(CustomTransactionBackedExceptionWithCode):
+    code = "TBE001"

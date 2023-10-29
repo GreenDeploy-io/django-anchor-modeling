@@ -13,8 +13,12 @@ from tests.orders.models.transaction_backed_models import (
     TProduct,
 )
 
+HistorizedTProduct = apps.get_model("orders", "HistorizedTProduct")
 HistorizedProductName = apps.get_model("orders", "HistorizedProductName")
 HistorizedProductDescription = apps.get_model("orders", "HistorizedProductDescription")
+HistorizedProductStockQuantity = apps.get_model(
+    "orders", "HistorizedProductStockQuantity"
+)
 
 
 @pytest.mark.django_db
@@ -75,6 +79,7 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
             p1 = TProduct.objects.create(business_identifier="p1")
 
     def test_model_n_manager_solo_create(self):
+        # sourcery skip: extract-duplicate-method, inline-immediately-returned-variable
         """
         happy path
         1. model->create->save
@@ -156,8 +161,7 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
             n0 = ProductName.objects.get(anchor__business_identifier="p0")
             original_transaction_n0 = n0.transaction
             n0.value = "Product 0 - updated"
-            n0.transaction = new_t
-            n0.save()
+            n0.save(transaction=new_t)
 
             new_count_historized_records_of_name = (
                 historized_product_name_of_p0_queryset.count()
@@ -171,6 +175,10 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
 
             assert previous_most_recent_historized_product_name.off_txn == new_t
 
+            assert (
+                most_recent_historized_product_name.pk
+                != previous_most_recent_historized_product_name.pk
+            )
             assert n0.transaction != original_transaction_n0
             assert n0.transaction != settings.SENTINEL_NULL_TRANSACTION_ID
             assert n0.value == "Product 0 - updated"
@@ -239,6 +247,10 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
 
             assert previous_most_recent_historized_product_desc.off_txn == new_t
 
+            assert (
+                most_recent_historized_product_desc.pk
+                != previous_most_recent_historized_product_desc.pk
+            )
             assert n0.transaction != original_transaction_n0
             assert n0.transaction != settings.SENTINEL_NULL_TRANSACTION_ID
             assert n0.value == "description for P0 - updated"
@@ -254,3 +266,239 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
                 most_recent_historized_product_desc.off_txn
                 == Transaction.get_sentinel()
             )
+
+    def test_model_n_manager_solo_delete(self):  # noqa: PLR0915
+        # sourcery skip: extract-duplicate-method, inline-immediately-returned-variable
+        """
+        happy path
+        3. model->delete
+        6. queryset/manager->delete
+        """
+        with transaction.atomic():
+            new_t = Transaction.objects.create()
+
+            p0 = TProduct.objects.get(business_identifier="p0")
+
+            historized_product_name_of_p0_queryset = (
+                HistorizedProductName.objects.filter(original_id=p0.pk)
+            )
+
+            previous_most_recent_historized_product_name = (
+                historized_product_name_of_p0_queryset.last()
+            )
+
+            assert (
+                previous_most_recent_historized_product_name.off_txn
+                == Transaction.get_sentinel()
+            )
+
+            count_historized_records_of_name = (
+                historized_product_name_of_p0_queryset.count()
+            )
+
+            n0 = ProductName.objects.get(anchor__business_identifier="p0")
+            original_transaction_n0 = n0.transaction
+            n0.delete(transaction=new_t)
+
+            new_count_historized_records_of_name = (
+                historized_product_name_of_p0_queryset.count()
+            )
+
+            most_recent_historized_product_name = (
+                historized_product_name_of_p0_queryset.last()
+            )
+
+            previous_most_recent_historized_product_name.refresh_from_db()
+
+            assert previous_most_recent_historized_product_name.off_txn == new_t
+
+            assert (
+                most_recent_historized_product_name.pk
+                == previous_most_recent_historized_product_name.pk
+            )
+            assert new_t != original_transaction_n0
+            assert (
+                ProductName.objects.filter(anchor__business_identifier="p0").count()
+                == 0
+            )
+
+            assert (
+                count_historized_records_of_name == new_count_historized_records_of_name
+            )
+            assert most_recent_historized_product_name.on_txn != new_t
+            assert most_recent_historized_product_name.off_txn == new_t
+
+            # test under 5. queryset/manager->delete
+            # and also make sure anchor delete will delete
+            # all the associated attributes
+
+            # left with
+            # Product
+            #  - Desc
+            #  - StockQuantity
+
+            # this is Product
+            historized_product_of_p0_queryset = HistorizedTProduct.objects.filter(
+                original_id=p0.pk
+            )
+
+            previous_most_recent_historized_product = (
+                historized_product_of_p0_queryset.last()
+            )
+
+            previous_most_recent_historized_product_pk = (
+                previous_most_recent_historized_product.pk
+            )
+            count_historized_records_of_product = (
+                historized_product_of_p0_queryset.count()
+            )
+            assert (
+                previous_most_recent_historized_product.off_txn
+                == Transaction.get_sentinel()
+            )
+
+            # end this is Product
+
+            # this is ProductDesc
+            historized_product_desc_of_p0_queryset = (
+                HistorizedProductDescription.objects.filter(original_id=p0.pk)
+            )
+
+            previous_most_recent_historized_product_desc = (
+                historized_product_desc_of_p0_queryset.last()
+            )
+
+            previous_most_recent_historized_product_desc_pk = (
+                previous_most_recent_historized_product_desc.pk
+            )
+
+            count_historized_records_of_product_desc = (
+                historized_product_desc_of_p0_queryset.count()
+            )
+            assert (
+                previous_most_recent_historized_product_desc.off_txn
+                == Transaction.get_sentinel()
+            )
+
+            # end this is ProductDesc
+
+            # this is ProductStockQuantity
+            historized_product_qty_of_p0_queryset = (
+                HistorizedProductStockQuantity.objects.filter(original_id=p0.pk)
+            )
+
+            previous_most_recent_historized_product_qty = (
+                historized_product_qty_of_p0_queryset.last()
+            )
+
+            previous_most_recent_historized_product_qty_pk = (
+                previous_most_recent_historized_product_qty.pk
+            )
+
+            count_historized_records_of_product_qty = (
+                historized_product_qty_of_p0_queryset.count()
+            )
+
+            assert (
+                previous_most_recent_historized_product_qty.off_txn
+                == Transaction.get_sentinel()
+            )
+
+            # end this is ProductStockQuantity
+
+            # now we delete the Product
+
+            TProduct.objects.filter(business_identifier="p0").delete(transaction=new_t)
+
+            # end of Txn
+
+            # this is TProduct
+            new_count_historized_records_of_product = (
+                historized_product_of_p0_queryset.count()
+            )
+
+            most_recent_historized_product = historized_product_of_p0_queryset.last()
+
+            previous_most_recent_historized_product = HistorizedTProduct.objects.get(
+                pk=previous_most_recent_historized_product_pk
+            )
+
+            assert previous_most_recent_historized_product.off_txn == new_t
+
+            assert (
+                most_recent_historized_product.pk
+                == previous_most_recent_historized_product.pk
+            )
+            assert (
+                new_count_historized_records_of_product
+                == count_historized_records_of_product
+            )
+
+            assert TProduct.objects.filter(business_identifier="p0").exists() is False
+            # end this is TProduct
+
+            # this is ProductDescription
+            new_count_historized_records_of_desc = (
+                historized_product_desc_of_p0_queryset.count()
+            )
+
+            most_recent_historized_product_desc = (
+                historized_product_desc_of_p0_queryset.last()
+            )
+
+            previous_most_recent_historized_product_desc = (
+                HistorizedProductDescription.objects.get(
+                    pk=previous_most_recent_historized_product_desc_pk
+                )
+            )
+
+            assert previous_most_recent_historized_product_desc.off_txn == new_t
+
+            assert (
+                most_recent_historized_product_desc.pk
+                == previous_most_recent_historized_product_desc.pk
+            )
+            assert (
+                new_count_historized_records_of_desc
+                == count_historized_records_of_product_desc
+            )
+            assert (
+                ProductDescription.objects.filter(
+                    anchor__business_identifier="p0"
+                ).exists()
+                is False
+            )
+            # end this is ProductDesc
+
+            # this is ProductStockQuantity
+            new_count_historized_records_of_qty = (
+                historized_product_qty_of_p0_queryset.count()
+            )
+
+            most_recent_historized_product_qty = (
+                historized_product_qty_of_p0_queryset.last()
+            )
+
+            previous_most_recent_historized_product_qty = (
+                HistorizedProductStockQuantity.objects.get(
+                    pk=previous_most_recent_historized_product_qty_pk
+                )
+            )
+
+            assert previous_most_recent_historized_product_qty.off_txn == new_t
+
+            assert (
+                most_recent_historized_product_qty.pk
+                == previous_most_recent_historized_product_qty.pk
+            )
+            assert (
+                new_count_historized_records_of_qty
+                == count_historized_records_of_product_qty
+            )
+            assert (
+                ProductStockQuantity.objects.filter(
+                    anchor__business_identifier="p0"
+                ).exists()
+                is False
+            )
+            # end this is ProductStockQuantity

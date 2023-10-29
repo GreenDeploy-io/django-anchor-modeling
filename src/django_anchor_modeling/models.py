@@ -1,6 +1,7 @@
 from types import new_class
 from typing import List, Union
 
+import icontract
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
@@ -13,6 +14,7 @@ from django.db.utils import IntegrityError
 from .exceptions import (
     CannotReuseExistingTransactionError,
     MissingTransactionInModelError,
+    NotAnAnchorError,
     SentinelTransactionCannotBeUsedError,
     UndeletableModelError,
 )
@@ -632,9 +634,10 @@ class TransactionBackedQuerySet(models.QuerySet):
         if historized_model:
             # Step 2: Extract primary keys and existing transaction_ids from the active records
             if active_record_data := self.values_list("pk", "transaction_id"):
+                all_the_original_pks = [record[0] for record in active_record_data]
                 # Step 3: Get the corresponding historized records
                 historized_records_queryset = historized_model.objects.filter(
-                    original__in=[record[0] for record in active_record_data],
+                    original__in=all_the_original_pks,
                     on_txn__in=[record[1] for record in active_record_data],
                     off_txn=Transaction.get_sentinel(),
                 )
@@ -647,6 +650,14 @@ class TransactionBackedQuerySet(models.QuerySet):
             if historized_records_queryset:
                 # Update existing historized records' off_txn to the current transaction
                 historized_records_queryset.update(off_txn_id=transaction_id)
+
+            # Step 5: propagate the delete down to attributes
+            if self.model.is_anchor is True:
+                attribute_classes = self.model.get_attribute_classes()
+                for _, related_class in attribute_classes.items():
+                    related_class.objects.filter(pk__in=all_the_original_pks).delete(
+                        transaction=transaction_id
+                    )
 
     def bulk_create(
         self,
@@ -761,16 +772,21 @@ def update_historized_on_save(instance, sender=None, *args, **kwargs):
 
 
 @db_transaction.atomic
-def update_historized_on_delete(instance, sender=None, *args, **kwargs):
-    sender = sender or instance.__class__  # Infer sender from instance if not provided
+@icontract.require(
+    lambda transaction, pk: transaction is not None and pk is not None,
+    "Transaction and pk must not be None",
+)
+def update_historized_on_delete(
+    sender=None, pk=None, transaction=None, *args, **kwargs
+):
     # Get the corresponding historized model
     historized_model = get_historized_model_for(sender)
 
     if historized_model is not None:
         # Update existing historized records with the latest transaction
         historized_model.objects.filter(
-            original=instance, off_txn=Transaction.get_sentinel()
-        ).update(off_txn=instance.transaction)
+            original_id=pk, off_txn=Transaction.get_sentinel()
+        ).update(off_txn=transaction)
 
 
 class TransactionBackedModel(models.Model):
@@ -781,18 +797,51 @@ class TransactionBackedModel(models.Model):
     )
     objects = TransactionBackedManager()
 
+    # will be determined as True or False by the inherited classf
+    is_anchor = None
+    is_attribute = None
+
     class Meta:
         abstract = True
 
-    def save(self, *args, **kwargs):
+    def save(self, *args, transaction: Union[int, "Transaction"] = None, **kwargs):
+        if transaction:
+            if isinstance(transaction, int):
+                try:
+                    transaction = Transaction.objects.get(pk=transaction)
+                except Transaction.DoesNotExist as e:
+                    raise Transaction.DoesNotExist from e
+            self.transaction = transaction
+
         self.check_transaction()
         super(TransactionBackedModel, self).save(*args, **kwargs)
         update_historized_on_save(self)
 
-    def delete(self, *args, **kwargs):
+    def delete(self, *args, transaction: Union[int, "Transaction"] = None, **kwargs):
+        """
+        override typical model.delete method
+        """
+        if transaction:
+            if isinstance(transaction, int):
+                try:
+                    transaction = Transaction.objects.get(pk=transaction)
+                except Transaction.DoesNotExist as e:
+                    raise Transaction.DoesNotExist from e
+            self.transaction = transaction
+
         self.check_transaction()
+        pk_before_delete = self.pk
+        transaction_before_delete = self.transaction
         super(TransactionBackedModel, self).delete(*args, **kwargs)
-        update_historized_on_delete(self)
+        update_historized_on_delete(
+            sender=self.__class__,
+            pk=pk_before_delete,
+            transaction=transaction_before_delete,
+        )
+        if self.is_anchor is True and hasattr(
+            self, "delete_attributes_on_anchor_delete"
+        ):
+            self.delete_attributes_on_anchor_delete(pk=pk_before_delete)
 
     @staticmethod
     def shared_required_transaction_check(transaction):
@@ -823,7 +872,7 @@ class TransactionBackedModel(models.Model):
         self.shared_required_transaction_check(transaction)
 
     def check_transaction(self):
-        self.required_transaction_check()
+        self.required_transaction_check(self.transaction)
         if self.pk:  # Check if this is an update and not a new object
             model_class = type(self)
             try:
@@ -915,10 +964,12 @@ def create_historized_model(original_model):
     additional_meta = {"abstract": False}
 
     # Create a new ForeignKey field that relates to the original model
+    # will neer be deleted
     original_foreign_key = models.ForeignKey(
         original_model,
-        on_delete=models.CASCADE,
+        on_delete=models.DO_NOTHING,
         related_name="versions",
+        db_constraint=False,
     )
 
     exclude = [
@@ -1046,8 +1097,68 @@ def historize_model(*args, **kwargs):
 
 
 class TransactionBackedAnchorNoBusinessId(TransactionBackedModel):
+    is_anchor = True
+    is_attribute = False
+
     class Meta:
         abstract = True
+
+    @classmethod
+    def get_attribute_classes(cls):
+        """
+        Only meant for Anchor class
+        """
+        if cls.is_anchor is not True:
+            return {}
+
+        related_classes = {}
+
+        for relation in cls._meta.get_fields():
+            if (
+                isinstance(relation, models.OneToOneRel)
+                and relation.remote_field.primary_key
+                and getattr(relation.remote_field.model, "is_attribute", False)
+            ):
+                related_model = relation.related_model
+                related_name = relation.get_accessor_name()
+                related_classes[related_name] = related_model
+
+        return related_classes
+
+    def get_attributes(self, pk):
+        """
+        Only meant for Anchor class
+        """
+        if self.is_anchor is not True:
+            return {}
+
+        if not pk:
+            pk = self.pk
+
+        related_instances = {}
+        for relation in type(self)._meta.get_fields():
+            if (
+                isinstance(relation, models.OneToOneRel)
+                and relation.remote_field.primary_key
+                and getattr(relation.remote_field.related_model, "is_attribute", False)
+            ):
+                related_model = relation.related_model
+                related_name = (
+                    relation.get_accessor_name()
+                )  # Use the accessor name (related_name or default)
+                try:
+                    related_instance = related_model.objects.get(anchor_id=pk)
+                    related_instances[related_name] = related_instance
+                except related_model.DoesNotExist:
+                    continue
+
+    @icontract.require(lambda pk: pk is not None, "pk must not be None")
+    def delete_attributes_on_anchor_delete(self, pk=None):
+        if self.is_anchor is not True:
+            raise NotAnAnchorError("This method is not allowed if not an Anchor class")
+        attributes = self.get_attributes(pk)
+        for _, related_instance in attributes.items():
+            related_instance.delete(transaction=self.transaction)
 
 
 class TransactionBackedAnchorWithBusinessId(TransactionBackedAnchorNoBusinessId):
@@ -1137,9 +1248,16 @@ def transaction_backed_static_attribute(
 
         """
 
+        is_anchor = False
+        is_attribute = True
+
+        # the on_delete is set to DO_NOTHING
+        # because we want fine grained control over the deletion of anchor
+        # as we want to update all the impacted attributes and their historized with the same
+        # transaction
         anchor = models.OneToOneField(
             anchor_class,
-            on_delete=models.CASCADE,
+            on_delete=models.DO_NOTHING,
             related_name=related_name,
             primary_key=True,
         )
