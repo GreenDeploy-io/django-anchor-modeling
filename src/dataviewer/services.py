@@ -1,3 +1,4 @@
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
@@ -5,10 +6,26 @@ from django.db import transaction
 from django.db.models import Prefetch
 
 from dataviewer.models import BusinessToDataFieldMap
-from metadata.services import create_change_with_reason
+
+
+def get_app_model(app_label, model_name):
+    cache_key = f"content_type:{app_label}.{model_name}"
+    model_class = cache.get(cache_key)
+    if not model_class:
+        try:
+            # lower_case_app_label = app_label.lower()
+            # lower_case_model_name = model_name.lower()
+            model_class = apps.get_model(app_label, model_name)
+            cache.set(cache_key, model_class)
+        except LookupError as e:
+            raise ValueError(f"Model {model_name} in app {app_label} not found.") from e
+    return model_class
 
 
 def get_model_class(model_name):
+    """
+    to be deprecated in favor of get_app_model
+    """
     cache_key = f"content_type:{model_name}"
     model_class = cache.get(cache_key)
     if not model_class:
@@ -85,10 +102,10 @@ def delete_and_create_biz_to_data_field_map(
         # delete from database
         BusinessToDataFieldMap.objects.filter(id=key).delete()
         # create from database
-        change = create_change_with_reason(reason_to_rewrite)
+        # change = create_change_with_reason(reason_to_rewrite)
         # update the cache
         data_map_model = BusinessToDataFieldMap.objects.create(
-            id=key, map=field_model_map, description=description, metadata=change
+            id=key, map=field_model_map, description=description
         )
         field_model_map = data_map_model.map
         cache_biz_to_data_field_map(key, field_model_map)

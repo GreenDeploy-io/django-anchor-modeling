@@ -31,7 +31,7 @@ settings.configure(
 # Initialize Django
 django.setup()
 
-call_command("makemigrations", "django_anchor_modeling")
 call_command("makemigrations", "orders")
+call_command("makemigrations", "django_anchor_modeling")
 call_command("makemigrations", "metadata")
 call_command("makemigrations", "dataviewer")

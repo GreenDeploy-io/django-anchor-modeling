@@ -1,0 +1,187 @@
+https://chat.openai.com/c/52c6d9af-519d-48cb-9d3f-377ad6bc68e5
+
+You could indeed use the Django `ContentType` model to keep track of which concrete model is shadowing another. However, automatically keeping the shadow model up-to-date when the original model changes is a bit tricky. The `ContentType` model can help you remember the relationship, but you'd still need to write custom logic to handle schema changes.
+
+Here are some approaches you could consider:
+
+### On-demand Update
+Write a management command that uses the `ContentType` information to compare the fields in the original and shadow models. If it detects differences, it could automatically generate the required migrations to update the shadow model.
+
+### Event-driven Update
+Although Django doesn't provide a built-in way to trigger code when `makemigrations` is run, you could use pre-commit hooks in your version control system to run your custom update logic. This could include running the management command mentioned in the "On-demand Update" section above.
+
+### Semi-Automatic Update
+You could also build an admin interface that uses `ContentType` to display all shadowing relationships, highlights discrepancies, and offers a one-click way to generate the needed migrations for each one.
+
+### Sample Code for a Management Command
+Here's a simplified example of how you could start writing a Django management command to compare fields between two models using the `ContentType` model:
+
+```python
+from django.core.management.base import BaseCommand
+from django.contrib.contenttypes.models import ContentType
+
+class Command(BaseCommand):
+    help = 'Update shadow models'
+
+    def handle(self, *args, **options):
+        # Let's assume you have stored ContentType references to identify
+        # which models are shadowing which
+        # for example: {'original_model_content_type_id': 'shadow_model_content_type_id'}
+
+        relationships = {
+            1: 2,  # Replace these with actual ContentType ids
+        }
+
+        for original_id, shadow_id in relationships.items():
+            original_model = ContentType.objects.get(id=original_id).model_class()
+            shadow_model = ContentType.objects.get(id=shadow_id).model_class()
+
+            original_fields = set(f.name for f in original_model._meta.fields)
+            shadow_fields = set(f.name for f in shadow_model._meta.fields)
+
+            # Compare and perform actions
+            if original_fields != shadow_fields:
+                self.stdout.write(f'Fields differ for {original_model} and {shadow_model}')
+                # Logic to update shadow model schema
+```
+
+This is a very basic example and doesn't cover many complexities you'd face in a real-world application, but it should provide a starting point.
+
+This approach gives you a lot of flexibility, but it's also more complex to implement and maintain, so you'll need to carefully consider whether it fits your needs and constraints.
+
+
+Your idea to have a new model that tracks the shadowing relationship is a good one. By doing so, you can leverage Django's `ContentType` model to dynamically keep track of the original ("active") and shadow ("historized") models. With the use of JSON fields, you can even specify which fields are tightly tracked and keep an inventory of all fields in the active model.
+
+Here's a possible implementation of such a tracking model:
+
+```python
+from django.contrib.contenttypes.models import ContentType
+from django.db import models
+
+class ModelShadowTracker(models.Model):
+    active_model_class = models.OneToOneField(
+        ContentType,
+        on_delete=models.CASCADE,
+        related_name='active_model',
+        primary_key=True
+    )
+    historized_model_class = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
+        related_name='historized_model'
+    )
+    tightly_tracked_fields = models.JSONField(default=list)
+    all_fields = models.JSONField(default=list)
+```
+
+This `ModelShadowTracker` model could then be used within a management command, or some other automated process, to check whether the `active_model_class` and `historized_model_class` are in sync, and if not, to generate the appropriate migrations.
+
+For example, the management command could do the following:
+
+1. Iterate over all instances of `ModelShadowTracker`.
+2. Use the `ContentType` information to get the actual model classes.
+3. Compare the list of fields stored in `all_fields` and `tightly_tracked_fields` with the current fields in the `active_model_class`.
+4. If discrepancies are found, generate new migrations to update the `historized_model_class`.
+
+By doing this, you can automate the process of keeping your shadow models up-to-date. Keep in mind that dynamically generating migrations like this can be risky, so it would be advisable to have robust testing in place to verify that the generated migrations are correct and that they don't result in data loss or other issues.
+
+Yes, you can programmatically find out which migrations are yet to be applied by using Django's internal migration framework. One common way is to use the `MigrationRecorder` class, which provides a high-level API to access the migration state. You can also use the `showmigrations` management command with the `--list` or `--list` and `--verbosity 2` flags to see the status of all migrations.
+
+Here's how you could do it programmatically:
+
+```python
+from django.db.migrations.recorder import MigrationRecorder
+
+def unapplied_migrations():
+    recorder = MigrationRecorder(connection)
+    applied_migrations = {x[0] for x in recorder.applied_migrations()}
+    all_migrations = {x[0] for x in recorder.disk_migrations}
+    return all_migrations - applied_migrations
+
+# This will return a set of migration names that have not been applied yet.
+```
+
+Note: Make sure to import your database `connection` before using it in `MigrationRecorder(connection)`. Usually, it is imported like so:
+
+```python
+from django.db import connection
+```
+
+For a more human-readable format, you can use the `showmigrations` management command in the shell:
+
+- To see all migrations and their status:
+
+  ```
+  python manage.py showmigrations --list
+  ```
+
+- To see only unapplied migrations, you can filter the output:
+
+  ```
+  python manage.py showmigrations --list | grep "\[ \]"
+  ```
+
+This command will list all migrations by their application, and put an `[X]` next to the ones that have been applied, and a `[ ]` next to the ones that haven't. The `grep "\[ \]"` will filter out only the unapplied ones.
+
+You could also run this command from within Python using `subprocess.run` and parse its output to find the unapplied migrations, though that would be less clean than using `MigrationRecorder`.
+
+```python
+import subprocess
+
+result = subprocess.run(['python', 'manage.py', 'showmigrations', '--list'], capture_output=True, text=True)
+unapplied = [line.split(' ')[1] for line in result.stdout.splitlines() if line.startswith('[ ]')]
+```
+
+This will give you a list `unapplied` containing the names of all unapplied migrations.
+
+Django doesn't store direct information about which `ContentType` is affected by each migration in an easily accessible manner. However, you can still try to extract this information through somewhat indirect methods. The migrations are Python files that include operations that affect specific models. By parsing these operations, you could theoretically determine which `ContentTypes` are impacted.
+
+Here are a few ways to approach this:
+
+1. **Parse Migration Files Manually**: You can read and parse the migration files for the unapplied migrations. You'd look for operations like `AddField`, `CreateModel`, `DeleteModel`, etc., and see which models they refer to.
+
+2. **Use Django's Migration Framework**: Django's migration framework has internal APIs that can read and manipulate migration files. The API is not considered public and could change without notice, but you could theoretically use it to achieve your goals.
+
+Here's a sketch of how you could use Django's internal migration framework to find the unique, impacted `ContentType`:
+
+```python
+from django.apps import apps
+from django.db.migrations.state import SchemaEditor
+from django.db import migrations, models, connection
+
+def get_impacted_contenttypes(migration_name, app_name):
+    # Get the migration class by name
+    migration_module = apps.get_app_config(app_name).get_installed_migrations()[migration_name]
+    migration = migration_module.Migration(migration_name, app_name)
+
+    # Get the operations from the migration
+    operations = migration.operations
+
+    # Check each operation for affected models
+    affected_models = set()
+    for operation in operations:
+        if isinstance(operation, migrations.AddField):
+            affected_models.add(operation.model_name)
+        elif isinstance(operation, migrations.CreateModel):
+            affected_models.add(operation.name)
+        # ... (check other operation types, like DeleteModel, AlterField, etc.)
+
+    # Find the corresponding content types
+    content_types = set()
+    for model_name in affected_models:
+        app_label, model = app_name, model_name.lower()
+        content_type = ContentType.objects.get(app_label=app_label, model=model)
+        content_types.add(content_type)
+
+    return content_types
+
+# Use the function
+unapplied_migrations = [(...)]  # You would fill in this list with the actual unapplied migrations
+impacted_contenttypes = set()
+for migration_name, app_name in unapplied_migrations:
+    impacted_contenttypes.update(get_impacted_contenttypes(migration_name, app_name))
+
+# impacted_contenttypes now contains the unique, impacted ContentTypes
+```
+
+Note: This is a rough example and may not cover all edge cases or types of migration operations. You may need to extend it to suit your needs. Also, the Django migration framework's internal APIs can change without notice, so proceed with caution.

@@ -17,6 +17,6 @@ class BusinessToDataFieldMap(CreatedModel):
     id = BusinessIdentifierField(primary_key=True)
     description = models.TextField()
     map = models.JSONField(default=dict)
-    metadata = models.ForeignKey(
-        "metadata.DataChange", on_delete=models.SET_NULL, null=True
-    )
+
+    # in the form of "app_label.model_class_name"
+    main_model_class = models.CharField(max_length=255, null=True)

@@ -1,11 +1,21 @@
 from types import new_class
+from typing import List, Union
 
+from django.apps import apps
 from django.conf import settings
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.core.validators import RegexValidator
 from django.db import models
+from django.db import transaction as db_transaction
 from django.db.utils import IntegrityError
 
+from .exceptions import (
+    CannotReuseExistingTransactionError,
+    MissingTransactionInModelError,
+    SentinelTransactionCannotBeUsedError,
+    UndeletableModelError,
+)
 from .fields import BusinessIdentifierField
 from .managers import (
     CompositeKeyManager,
@@ -74,17 +84,77 @@ class CreatedModel(models.Model):
         abstract = True
 
 
+class UndeletableModelManager(models.Manager):
+    def delete(self, *args, **kwargs):
+        qs = self.all()
+        for obj in qs:
+            if not obj.can_be_deleted():
+                raise UndeletableModelError(
+                    "Some objects cannot be deleted due to conditions."
+                )
+        super().delete(*args, **kwargs)
+
+
 class UndeletableModel(models.Model):
     """
     An abstract base class model that disallows delete
     probably needs another that disallows delete depending on conditions
     """
 
-    def delete(self):
-        pass
+    objects = UndeletableModelManager()
 
     class Meta:
         abstract = True
+
+    def can_be_deleted(self):
+        """
+        Override this method in subclass to set custom delete conditions.
+        If not overridden, it will return False, making the instance undeletable.
+        """
+        return False
+
+    def delete(self, *args, **kwargs):
+        raise UndeletableModelError("This model instance cannot be deleted.")
+
+
+# How to use Undeletable
+# Usage
+# try:
+#     # Attempting to delete using manager
+#     UndeletableModel.objects.delete()
+# except UndeletableModelError as e:
+#     print(f"An exception occurred: {str(e)}")
+
+# try:
+#     # Attempting to delete using instance
+#     my_instance = UndeletableModel()
+#     my_instance.delete()
+# except UndeletableModelError as e:
+#     print(f"An exception occurred: {str(e)}")
+
+# need computedfields
+# class ConditionalUndeletableModelManager(UndeletableModelManager):
+#     def delete(self, *args, **kwargs):
+#         if self.filter(is_deletable=False).exists():
+#             raise UndeletableModelError("Some objects cannot be deleted due to conditions.")
+#         super().delete(*args, **kwargs)
+
+# class ConditionalUndeletableModel(ComputedFieldsModel, UndeletableModel):
+#     some_field = models.BooleanField(default=False)  # Example field
+
+#     @computed(models.BooleanField(default=False), depends=['some_field'])
+#     def is_deletable(self):
+#         return self.some_field  # Replace with your actual computation logic
+
+#     objects = ConditionalUndeletableModelManager()
+
+#     class Meta:
+#         abstract = True
+
+#     def delete(self, *args, **kwargs):
+#         if not self.is_deletable:
+#             raise UndeletableModelError("This model instance cannot be deleted due to conditions.")
+#         super().delete(*args, **kwargs)
 
 
 class ZeroUpdateStrategyModel(models.Model):
@@ -452,6 +522,541 @@ class AnchorNoBusinessId(ZeroUpdateStrategyModel):
         abstract = True
 
 
+# What is Sentinel value?
+# It's a dummy value that's used to represent a out of band value. Like NULL.
+# See https://en.wikipedia.org/wiki/Sentinel_value for more details
+# Here, it's used to represent a NULL Transaction because we don't allow
+# NULL values for the foreignkey Transaction field in TransactionBackedModel
+SENTINEL_NULL_TRANSACTION_ID = getattr(settings, "SENTINEL_NULL_TRANSACTION_ID", 1)
+
+
+class Transaction(CreatedModel, UndeletableModel):
+    @classmethod
+    def get_sentinel(cls):
+        return cls.objects.get_or_create(pk=SENTINEL_NULL_TRANSACTION_ID)[0]
+
+
+class TransactionBackedManager(models.Manager):
+    def get_queryset(self):
+        return TransactionBackedQuerySet(self.model, using=self._db)
+
+
+class TransactionBackedQuerySet(models.QuerySet):
+    def required_transaction_check(self, transaction: Union[int, "Transaction"] = None):
+        if not transaction:
+            raise MissingTransactionInModelError(
+                "A transaction must be provided for update."
+            )
+
+        transaction_id = (
+            transaction.id if isinstance(transaction, models.Model) else transaction
+        )
+
+        self.model.shared_required_transaction_check(transaction_id)
+
+        return transaction_id
+
+    def update(self, *args, transaction: Union[int, "Transaction"] = None, **kwargs):
+        transaction_id = self.required_transaction_check(transaction)
+
+        if self.filter(transaction_id=transaction_id).exists():
+            raise CannotReuseExistingTransactionError(
+                "New Transaction must be provided for update."
+            )
+
+        # Step 1: Get the corresponding historized model
+        historized_model = get_historized_model_for(self.model)
+        historized_records_queryset = None
+
+        if historized_model:
+            # Step 2: Extract primary keys and existing transaction_ids from the active records
+            if active_record_data := self.values_list("pk", "transaction_id"):
+                # Step 3: Get the corresponding historized records
+                historized_records_queryset = historized_model.objects.filter(
+                    original__in=[record[0] for record in active_record_data],
+                    on_txn__in=[record[1] for record in active_record_data],
+                    off_txn=Transaction.get_sentinel(),
+                )
+
+        with db_transaction.atomic():
+            # Perform the update regardless if historized_model or historized_records is None
+            kwargs["transaction_id"] = transaction_id
+            super(TransactionBackedQuerySet, self).update(*args, **kwargs)
+
+            # Step 4: Update the historized records
+            if historized_records_queryset:
+                # Update existing historized records' off_txn to the current transaction
+                historized_records_queryset.update(off_txn_id=transaction_id)
+
+                # Fetch the updated active records
+                updated_active_records = self.values()
+
+                # Create a list to hold the new historized instances
+                new_historized_records = []
+
+                for updated_record in updated_active_records:
+                    # updated_record is dict
+                    the_active_pk = updated_record.get(
+                        "pk", updated_record.get("id", updated_record.get("anchor_id"))
+                    )
+
+                    new_historized_instance = historized_model(
+                        on_txn_id=transaction_id,
+                        off_txn=Transaction.get_sentinel(),
+                        original_id=the_active_pk,
+                    )
+
+                    for field, value in updated_record.items():
+                        if field in [
+                            "transaction_id",
+                            "id",
+                            "pk",
+                            "transaction",
+                        ]:  # Skip transaction_id as we set it explicitly
+                            continue
+
+                        setattr(new_historized_instance, field, value)
+
+                    new_historized_records.append(new_historized_instance)
+
+                # Perform bulk insertion
+                historized_model.objects.bulk_create(new_historized_records)
+
+    def delete(self, *args, transaction: Union[int, "Transaction"], **kwargs):
+        transaction_id = self.required_transaction_check(transaction)
+
+        # Step 1: Get the corresponding historized model
+        historized_model = get_historized_model_for(self.model)
+        historized_records_queryset = None
+
+        if historized_model:
+            # Step 2: Extract primary keys and existing transaction_ids from the active records
+            if active_record_data := self.values_list("pk", "transaction_id"):
+                # Step 3: Get the corresponding historized records
+                historized_records_queryset = historized_model.objects.filter(
+                    original__in=[record[0] for record in active_record_data],
+                    on_txn__in=[record[1] for record in active_record_data],
+                    off_txn=Transaction.get_sentinel(),
+                )
+
+        with db_transaction.atomic():
+            # Perform the delete regardless if historized_model or historized_records is None
+            super(TransactionBackedQuerySet, self).delete(*args, **kwargs)
+
+            # Step 4: Update the historized records
+            if historized_records_queryset:
+                # Update existing historized records' off_txn to the current transaction
+                historized_records_queryset.update(off_txn_id=transaction_id)
+
+    def bulk_create(
+        self,
+        objs: List[models.Model],
+        batch_size=None,
+        transaction: Union[int, "Transaction"] = None,
+    ):
+        """
+        ensures the transaction is supplied
+        """
+        transaction_id = self.required_transaction_check(transaction)
+
+        # Ensure transaction is set in all objects
+        for obj in objs:
+            obj.transaction_id = transaction_id
+
+        super(TransactionBackedQuerySet, self).bulk_create(objs, batch_size=batch_size)
+
+    def bulk_update(
+        self,
+        objs,
+        fields,
+        batch_size=None,
+        transaction: Union[int, "Transaction"] = None,
+    ):
+        """
+        the logic is exactly the same as bulk_create
+        except it also checks that the transaction_id is not repeated in existing objects
+        """
+        transaction_id = self.required_transaction_check(transaction)
+
+        obj_ids = [obj.pk for obj in objs]
+
+        if self.filter(pk__in=obj_ids, transaction_id=transaction_id).exists():
+            raise CannotReuseExistingTransactionError(
+                "New Transaction must be provided for bulk updates."
+            )
+
+        for obj in objs:
+            obj.transaction_id = transaction_id
+
+        super(TransactionBackedQuerySet, self).bulk_update(
+            objs, fields + ["transaction_id"], batch_size=batch_size
+        )
+
+
+def get_historized_model_for(model_or_instance):
+    # Identify the target model class
+    if isinstance(model_or_instance, type):
+        target_model_class = model_or_instance
+    else:
+        target_model_class = model_or_instance.__class__
+
+    # Retrieve the name of the historized model from the target model's class attribute
+    historized_model_name = getattr(target_model_class, "historized_model_name", None)
+
+    if historized_model_name is None:
+        raise ValueError(f"No historized model associated with {target_model_class}")
+
+    # Use Django's app registry to get the actual historized model class
+    return apps.get_model(historized_model_name)
+
+    # content_type = ContentType.objects.get_for_model(model)
+    # cache_key = f"historized_model_for_{content_type.app_label}_{content_type.model}"
+
+    # # Try to get the historized model from cache
+    # historized_model = cache.get(cache_key)
+
+    # if historized_model is not None:
+    #     return historized_model
+
+    # # If it's not in the cache, look it up (replace this with your logic)
+    # try:
+    #     mapping = HistorizedModelMap.objects.get(active_model=content_type)
+    #     historized_model = mapping.historized_model.model_class()
+    # except HistorizedModelMap.DoesNotExist:
+    #     historized_model = None  # or some default
+
+    # # Store the looked-up value in cache
+    # cache.set(cache_key, historized_model)
+
+    # return historized_model
+
+
+@db_transaction.atomic
+def update_historized_on_save(instance, sender=None, *args, **kwargs):
+    sender = sender or instance.__class__  # Infer sender from instance if not provided
+    # Get the corresponding historized model
+    historized_model = get_historized_model_for(sender)
+
+    if historized_model is not None:
+        # Update existing historized records with the latest transaction
+        historized_model.objects.filter(
+            original=instance, off_txn=Transaction.get_sentinel()
+        ).update(off_txn=instance.transaction)
+
+        # Create a new historized instance
+        historized_instance = historized_model(
+            on_txn=instance.transaction, original=instance
+        )
+
+        # Copy fields from the original instance to the historized instance
+        for field in sender._meta.fields:
+            if field.name not in [
+                "id",
+                "transaction",
+            ]:  # Exclude id and transaction fields
+                setattr(historized_instance, field.name, getattr(instance, field.name))
+
+        # Save the new historized instance
+        historized_instance.save()
+
+
+@db_transaction.atomic
+def update_historized_on_delete(instance, sender=None, *args, **kwargs):
+    sender = sender or instance.__class__  # Infer sender from instance if not provided
+    # Get the corresponding historized model
+    historized_model = get_historized_model_for(sender)
+
+    if historized_model is not None:
+        # Update existing historized records with the latest transaction
+        historized_model.objects.filter(
+            original=instance, off_txn=Transaction.get_sentinel()
+        ).update(off_txn=instance.transaction)
+
+
+class TransactionBackedModel(models.Model):
+    transaction = models.ForeignKey(
+        Transaction,
+        on_delete=models.SET(Transaction.get_sentinel),
+        default=Transaction.get_sentinel,
+    )
+    objects = TransactionBackedManager()
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        self.check_transaction()
+        super(TransactionBackedModel, self).save(*args, **kwargs)
+        update_historized_on_save(self)
+
+    def delete(self, *args, **kwargs):
+        self.check_transaction()
+        super(TransactionBackedModel, self).delete(*args, **kwargs)
+        update_historized_on_delete(self)
+
+    @staticmethod
+    def shared_required_transaction_check(transaction):
+        """
+        static method to share the logic in model instance method and queryset method
+        """
+        if not transaction:
+            raise MissingTransactionInModelError("A transaction must be provided.")
+
+        transaction_id = transaction
+        if isinstance(transaction, Transaction):
+            transaction_id = transaction.id
+
+        if transaction_id == SENTINEL_NULL_TRANSACTION_ID:
+            raise SentinelTransactionCannotBeUsedError(
+                "You cannot use a Sentinel NULL Transaction."
+            )
+
+    def required_transaction_check(self, transaction: Union[int, "Transaction"] = None):
+        """
+        ensure that a valid transaction is set
+        """
+        if transaction is None:
+            transaction = getattr(
+                self, "transaction", getattr(self, "transaction_id", None)
+            )
+
+        self.shared_required_transaction_check(transaction)
+
+    def check_transaction(self):
+        self.required_transaction_check()
+        if self.pk:  # Check if this is an update and not a new object
+            model_class = type(self)
+            try:
+                original = model_class.objects.get(pk=self.pk)
+            except model_class.DoesNotExist:
+                # most probably an Attribute created for first time because of
+                # the OneToOneField as pk
+                return
+
+            # Priority for checking the transaction object
+            if self.transaction and self.transaction == original.transaction:
+                raise CannotReuseExistingTransactionError(
+                    "New Transaction must be provided for updates or deletes."
+                )
+
+            # Fallback to checking the transaction_id if transaction object is not available
+            elif self.transaction_id and self.transaction_id == original.transaction_id:
+                raise CannotReuseExistingTransactionError(
+                    "New Transaction ID must be provided for updates or deletes."
+                )
+
+
+class HistorizedModelMap(models.Model):
+    active_model = models.OneToOneField(
+        ContentType, related_name="historized_map_active", on_delete=models.CASCADE
+    )
+    historized_model = models.ForeignKey(
+        ContentType, related_name="historized_map_historized", on_delete=models.CASCADE
+    )
+
+    @classmethod
+    def register(cls, active_model, historized_model):
+        active_content_type = ContentType.objects.get_for_model(active_model)
+        historized_content_type = ContentType.objects.get_for_model(historized_model)
+        cls.objects.get_or_create(
+            active_model=active_content_type, historized_model=historized_content_type
+        )
+
+
+def should_skip_field_to_be_shadowed(field, active_model_class):
+    """
+    Determines whether a field should be skipped based on certain conditions.
+
+    Parameters:
+        field: The field object.
+        active_model_class: The active model class.
+        Transaction: The Transaction model class.
+
+    Returns:
+        bool: True if the field should be skipped, False otherwise.
+    """
+    # Condition 1: Skip the primary key
+    if field.name == active_model_class._meta.pk.name:
+        return True
+
+    # Condition 2: Skip if the field is a ForeignKey and its target model is Transaction
+    if isinstance(field, models.ForeignKey) and field.related_model == Transaction:
+        return True
+
+    return False
+
+
+import copy
+
+
+def _generate_history_field(original_model, field):
+    if isinstance(field, models.AutoField):
+        return models.IntegerField()
+    elif isinstance(field, models.BigAutoField):
+        return models.BigIntegerField()
+    elif not field.concrete:
+        return field
+
+    # Deep copy the field to avoid altering the original
+    field = copy.deepcopy(field)
+    getattr(field, "swappable", None)
+    field.swappable = False
+    return field
+
+
+def create_historized_model(original_model):
+    model_name = f"Historized{original_model.__name__}"
+    app_label = original_model._meta.app_label
+    app = apps.app_configs[app_label]
+    models_module = f"{app.module.__name__}.models"
+
+    # Additional attributes and metadata could be defined here
+    additional_attrs = {}
+    additional_meta = {"abstract": False}
+
+    # Create a new ForeignKey field that relates to the original model
+    original_foreign_key = models.ForeignKey(
+        original_model,
+        on_delete=models.CASCADE,
+        related_name="versions",
+    )
+
+    exclude = [
+        "id",
+        "transaction",
+        "transaction_id",
+        "pk",
+        "anchor",
+        # "business_identifier",
+    ]
+
+    # Generate fields dynamically, excluding the specified ones
+    # CANNOT use _meta.fields_map as it will cause Models aren't loaded yet error
+    # USE _meta.fields instead
+    generated_fields = {
+        field.name: _generate_history_field(original_model, field)
+        for field in original_model._meta.fields
+        if field.name not in exclude
+    }
+
+    class_attrs = {
+        "__module__": models_module,
+        "Meta": type(
+            "Meta", (), {"abstract": False, "app_label": app_label, **additional_meta}
+        ),
+        "original": original_foreign_key,  # New ForeignKey field
+        "original_model": original_model,  # The class attribute for original_model
+        **generated_fields,
+        **additional_attrs,
+    }
+
+    # Create the new model class dynamically
+    return type(model_name, (Historized,), class_attrs)
+
+
+from django.db import models
+
+
+class Historized(models.Model):
+    # Your fields here
+    on_txn = models.ForeignKey(
+        Transaction,
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+        default=Transaction.get_sentinel,
+        related_name="created_%(app_label)s_%(class)ss",
+        related_query_name="that_created_%(app_label)s_%(class)ss",
+    )
+    off_txn = models.ForeignKey(
+        Transaction,
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+        default=Transaction.get_sentinel,
+        related_name="deactivated_%(app_label)s_%(class)ss",
+        related_query_name="that_deactivated_%(app_label)s_%(class)ss",
+    )
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def historized_setup(cls):
+        # Your setup logic here for the Historized model
+        if cls._meta.abstract:
+            return
+
+        # original_class = cls
+
+        # class_name = f"Historized{original_class.__name__}"
+        # app_label = original_class._meta.app_label
+
+        # # Create Meta class dynamically
+        # class Meta:
+        #     abstract = False
+
+        # # Define new attributes
+        # attrs = {
+        #     "Meta": Meta,
+        #     "__module__": original_class.__module__,
+        #     "id": models.BigAutoField(primary_key=True),
+        #     # Add fields from the original model class, skipping 'id' and 'transaction'
+        #     **{
+        #         f.name: f
+        #         for f in original_class._meta.fields
+        #         if f.name not in ["id", "transaction"]
+        #     },
+        #     "original": models.ForeignKey(
+        #         original_class,
+        #         on_delete=models.DO_NOTHING,
+        #         db_constraints=False,
+        #         related_name="versions",
+        #     ),
+        # }
+
+        # # Create the new model class
+        # new_model = type(class_name, (original_class, Historized), attrs)
+
+        # # Register this new model with Django's app registry
+        # apps.register_model(app_label, new_model)
+
+
+def historize_model(*args, **kwargs):
+    """
+    decorator applied to Django model class to historize it
+    as in create another Django model class with `Historized` prepended to the
+    same class name and have it inherit the Historized abstract class
+    """
+
+    def _model_wrapper(model_class):
+        """
+
+        1. Calls create_historized_model: It calls create_historized_model with the model class and the parameters that were passed to track. This effectively creates a new, associated event tracking model for model_class.
+        2. Returns model_class: After setting up the event tracking, it returns the original model class unchanged.
+        """
+        historized_model = create_historized_model(model_class)
+
+        model_class.historized_model_name = (
+            f"{historized_model._meta.app_label}.{historized_model.__name__}"
+        )
+
+        return model_class
+
+    # If it's being used without arguments, args[0] will be the model class itself
+    return _model_wrapper(args[0]) if args else _model_wrapper
+
+
+class TransactionBackedAnchorNoBusinessId(TransactionBackedModel):
+    class Meta:
+        abstract = True
+
+
+class TransactionBackedAnchorWithBusinessId(TransactionBackedAnchorNoBusinessId):
+    business_identifier = BusinessIdentifierField(unique=True)
+
+    class Meta:
+        abstract = True
+
+
 class KnotManager(models.Manager):
     def ensure_choices_exist(self):
         model_cls = self.model
@@ -498,3 +1103,131 @@ class Knot(UndeletableModel):
 
     class Meta:
         abstract = True
+
+
+def transaction_backed_static_attribute(
+    anchor_class, value_type, related_name="%(class)s_related"
+):
+    """
+    A factory function that generates a model for static attributes.
+
+    Args:
+        anchor_class: The class to which the static attribute is anchored.
+        value_type: The type of the static attribute value.
+        related_name (str, optional): The related name for the anchor field. Defaults to "%(class)s_related".
+
+    Returns:
+        StaticAttribute: A model for static attributes.
+
+    """
+
+    class TransactionBackedStaticAttribute(TransactionBackedModel):
+        """
+        A model for static attributes.
+
+        This also works for ForeignKey as attributes
+
+        Attributes:
+            anchor (OneToOneField): A OneToOneField to the anchor class as primary key.
+            value (value_type): A field representing the value of the static attribute.
+            objects (TransactionBackedManager): The manager instance for the model.
+
+        Meta:
+            abstract (bool): Specifies that this model is an abstract base class.
+
+        """
+
+        anchor = models.OneToOneField(
+            anchor_class,
+            on_delete=models.CASCADE,
+            related_name=related_name,
+            primary_key=True,
+        )
+        value = value_type
+
+        objects = TransactionBackedManager()
+
+        class Meta:
+            abstract = True
+
+    # This block is inside static_attribute but outside StaticAttribute
+    if isinstance(value_type, models.ForeignKey):
+        # Dynamically set the manager method on the anchor class
+        # so can more easily get_by_parent_related_name
+        if hasattr(anchor_class, "filters"):
+            manager_instance = getattr(anchor_class, "filters")
+            add_method_to_manager(manager_instance.__class__, related_name)
+        else:
+            # create_custom_manager should be modified to accommodate this logic
+            custom_manager = create_prepare_filter_manager(related_name)
+            anchor_class.add_to_class("filters", custom_manager)
+
+    return TransactionBackedStaticAttribute
+
+
+# Example usage
+# from django.db import models
+
+# class MyActiveModel(TransactionBackedModel):
+#     name = models.CharField(max_length=100)
+#     age = models.IntegerField()
+
+# # Generate the abstract historized model
+# AbstractForThisHistorized = historized_model(MyActiveModel)
+
+# # Create the concrete historized model
+# class HistorizedMyModel(AbstractForThisHistorized):
+#     # You can add additional fields or methods here if needed
+#     pass
+
+
+# Now, HistorizedMyModel is an abstract model that "shadows" MyActiveModel.
+
+# then need to register so that can connect the save and delete model methods
+# HistorizedModelMap.register(MyActiveModel, HistorizedMyActiveModel)
+
+
+# LimitedGFK (seldom GFK is really unlimited)
+# need to inherit StaticTie
+# then allow a limited generic_foreign_key (is_under_what_id, under_what_type as the Knot value)
+# allow the Knot class to setup the limited choices
+# create custom filter like static_attribute as well
+
+# LimitedGFK is really OneGenericOneSpecificTie
+# Specific is foreignkey so will ahve related_name
+# this will auto create the Specific.filters.get_by_related_name(Union[Generic1, Generic2, Generic3])
+# but the Generic1, Generic2, Generic3 will not have related_name so need a map
+# this will auto create the Generic1.filters.get_by_related_name(Specific)
+# this will auto create the Generic2.filters.get_by_related_name(Specific)
+# this will auto create the Generic3.filters.get_by_related_name(Specific)
+
+# ModelUnionKnot extends Knot to allow a union of models. once the UNION is set, auto fill up the Textchoices
+
+
+# Undeletable as separate attribute
+
+
+# from computedfields.models import ComputedFieldsModel, computed
+
+# def anchor_is_deletable(anchor_class, related_name="%(class)s_is_deletable"):
+#     class AnchorIsDeletable(ComputedFieldsModel, ZeroUpdateStrategyModel):
+#         anchor = models.OneToOneField(
+#             anchor_class,
+#             on_delete=models.CASCADE,
+#             related_name=related_name,
+#             primary_key=True,
+#         )
+#         value = models.BooleanField(default=False)
+
+
+#         @computed(models.BooleanField(default=False), depends=['anchor.related_attribute.value'])
+#         def is_deletable(self):
+#             return self.anchor.related_attribute.value  # Replace with your actual computation logic
+
+
+#         objects = ZeroUpdateStrategyManager()
+
+#         class Meta:
+#             abstract = True
+
+#     return AnchorIsDeletable
