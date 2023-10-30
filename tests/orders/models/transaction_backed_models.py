@@ -50,3 +50,10 @@ class ProductStockQuantity(AbstractProductStockQuantity):
 
 class ProductWithNoHistory(TransactionBackedAnchorWithBusinessId):
     pass
+
+
+@historize_model
+class WithFKThatSetRelatedName(TransactionBackedAnchorWithBusinessId):
+    some_fk = models.ForeignKey(
+        TProduct, on_delete=models.CASCADE, related_name="some_product"
+    )

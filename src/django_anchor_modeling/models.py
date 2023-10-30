@@ -950,8 +950,11 @@ def _generate_history_field(original_model, field):
     field = copy.deepcopy(field)
 
     # Check if the field is a ForeignKey
-    if isinstance(field, models.ForeignKey) and field.related_name is not None:
-        field.related_name = f"historized_{field.related_name}"
+    if isinstance(field, models.ForeignKey):
+        if related_name := getattr(field, "_related_name", None):
+            field._related_name = f"historized_{related_name}"
+        if related_query_name := getattr(field, "_related_query_name", None):
+            field._related_query_name = f"historized_{related_query_name}"
 
     getattr(field, "swappable", None)
     field.swappable = False
