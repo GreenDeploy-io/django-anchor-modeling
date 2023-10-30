@@ -46,3 +46,7 @@ AbstractProductStockQuantity = transaction_backed_static_attribute(
 @historize_model
 class ProductStockQuantity(AbstractProductStockQuantity):
     pass
+
+
+class ProductWithNoHistory(TransactionBackedAnchorWithBusinessId):
+    pass

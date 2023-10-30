@@ -715,7 +715,7 @@ def get_historized_model_for(model_or_instance):
     historized_model_name = getattr(target_model_class, "historized_model_name", None)
 
     if historized_model_name is None:
-        raise ValueError(f"No historized model associated with {target_model_class}")
+        return None
 
     # Use Django's app registry to get the actual historized model class
     return apps.get_model(historized_model_name)
@@ -948,6 +948,11 @@ def _generate_history_field(original_model, field):
 
     # Deep copy the field to avoid altering the original
     field = copy.deepcopy(field)
+
+    # Check if the field is a ForeignKey
+    if isinstance(field, models.ForeignKey) and field.related_name is not None:
+        field.related_name = f"historized_{field.related_name}"
+
     getattr(field, "swappable", None)
     field.swappable = False
     return field
