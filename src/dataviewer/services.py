@@ -129,7 +129,6 @@ def get_hydrated_anchor_based_on_data_map(
     This only works when the map follows BusinessToDataFieldMap.
     Returns the hydrated instance
     """
-
     queryset = get_hydrated_queryset_based_on_data_map(
         {"id": anchor_pk}, main_model_class, field_model_map, fields
     )
@@ -207,7 +206,8 @@ def append_select_or_prefetch_related_fields(
     order_by = model_info.get("order_by", "")
 
     if fetch_type == "select_related":
-        select_related_fields.append(field_name)
+        related_name = model_info.get("related_name", field)
+        select_related_fields.append(related_name)
     elif fetch_type == "prefetch_related":
         related_name = model_info.get("related_name", field)
         prefetch = Prefetch(
@@ -242,13 +242,24 @@ def append_result_with_right_data_in_field(anchor, model_info, field, result):
     field_name = model_info["field"]
     fetch_type = model_info.get("type")
 
-    if fetch_type == "select_related" or fetch_type != "prefetch_related":
-        result[field] = getattr(anchor, field_name, None)
-    else:
+    if fetch_type == "select_related":
+        related_name = model_info.get("related_name", field)
+        related_object = getattr(anchor, related_name)
+        result[field] = getattr(related_object, field_name, None)
+    elif fetch_type == "prefetch_related":
         related_name = model_info.get("related_name", field)
         try:
-            if related_object := getattr(anchor, related_name).first():
-                result[field] = getattr(related_object, field_name, None)
+            related_queryset = getattr(anchor, related_name)
+            # For a OneToOneField or ForeignKey, you don't use .first() directly
+            # but for a reverse relation resulting in a queryset, you do.
+            related_object = (
+                related_queryset.first()
+                if hasattr(related_queryset, "first")
+                else related_queryset
+            )
+            result[field] = getattr(related_object, field_name, None)
         except (AttributeError, ObjectDoesNotExist):
             result[field] = None
+    else:
+        result[field] = getattr(anchor, field_name, None)
     return result

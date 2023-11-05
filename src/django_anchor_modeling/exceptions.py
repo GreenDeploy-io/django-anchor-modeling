@@ -1,4 +1,5 @@
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
+from icontract import ViolationError
 
 
 class UndeletableModelError(PermissionDenied):
@@ -41,3 +42,27 @@ class CustomTransactionBackedExceptionWithCode(PermissionDenied):
 
 class NotAnAnchorError(CustomTransactionBackedExceptionWithCode):
     code = "TBE001"
+
+
+# Custom exception class for a specific type of contract violation
+class TransactionTypeError(ViolationError):
+    """
+    use this exception to indicate that a transaction is not Transation type
+    and inside an icontract require clause
+
+    Example:
+    >>> @require(
+    >>>  lambda transaction=None: transaction is None or isinstance(transaction, Transaction),
+    >>>  description="'transaction' in kwargs must be an instance of 'Transaction'.",
+    >>>  error=TransactionTypeError  # Use your custom exception here
+    >>> )
+    >>> def save_project_fas(
+    >>>   *,
+    >>>   project: Union[Project, int],
+    >>>   fas: Union[Fas, int],
+    >>>   transaction: Union[Transaction, None] = None,
+    >>>   **kwargs
+    >>> ):
+    """
+
+    pass
