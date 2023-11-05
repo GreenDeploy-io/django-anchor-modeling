@@ -1,15 +1,17 @@
 import pytest
 from django.apps import apps
-from django.conf import settings
 from django.db import transaction
 from django.test import TestCase
 
+from django_anchor_modeling import constants
 from django_anchor_modeling.exceptions import SentinelTransactionCannotBeUsedError
 from django_anchor_modeling.models import Transaction
 from tests.orders.models.transaction_backed_models import (
     ProductDescription,
+    ProductHasSeller,
     ProductName,
     ProductStockQuantity,
+    TBusiness,
     TProduct,
 )
 
@@ -35,6 +37,7 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
     8. queryset/manager->update_or_create
     9. manager->bulk_update
     10. manager->bulk_delete
+    11. attribute->create_or_update_if_different
 
     exceptions:
     1. ActiveModelClassMustBeTransactionBackedError TE001
@@ -95,7 +98,7 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
 
             assert t_p1 == t1
             assert t_p1 == p1.transaction
-            assert t_p1.id != settings.SENTINEL_NULL_TRANSACTION_ID
+            assert t_p1.id != constants.SENTINEL_NULL_TRANSACTION_ID
 
             n1 = ProductName()
             n1.anchor = p1
@@ -107,7 +110,7 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
 
             assert t_n1 == t1
             assert t_n1 == n1.transaction
-            assert t_n1.id != settings.SENTINEL_NULL_TRANSACTION_ID
+            assert t_n1.id != constants.SENTINEL_NULL_TRANSACTION_ID
 
             pd1 = ProductDescription.objects.create(
                 anchor=p1, value="description for P1", transaction=t1
@@ -117,7 +120,7 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
 
             assert t_pd1 == t1
             assert t_pd1 == pd1.transaction
-            assert t_pd1.id != settings.SENTINEL_NULL_TRANSACTION_ID
+            assert t_pd1.id != constants.SENTINEL_NULL_TRANSACTION_ID
 
             psq1 = ProductStockQuantity.objects.create(
                 anchor=p1, value=100, transaction=t1
@@ -127,7 +130,7 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
 
             assert t_psq1 == t1
             assert t_psq1 == psq1.transaction
-            assert t_psq1.id != settings.SENTINEL_NULL_TRANSACTION_ID
+            assert t_psq1.id != constants.SENTINEL_NULL_TRANSACTION_ID
 
     def test_model_n_manager_solo_update(self):
         """
@@ -180,7 +183,7 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
                 != previous_most_recent_historized_product_name.pk
             )
             assert n0.transaction != original_transaction_n0
-            assert n0.transaction != settings.SENTINEL_NULL_TRANSACTION_ID
+            assert n0.transaction != constants.SENTINEL_NULL_TRANSACTION_ID
             assert n0.value == "Product 0 - updated"
             assert (
                 count_historized_records_of_name + 1
@@ -252,7 +255,7 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
                 != previous_most_recent_historized_product_desc.pk
             )
             assert n0.transaction != original_transaction_n0
-            assert n0.transaction != settings.SENTINEL_NULL_TRANSACTION_ID
+            assert n0.transaction != constants.SENTINEL_NULL_TRANSACTION_ID
             assert n0.value == "description for P0 - updated"
             assert (
                 count_historized_records_of_desc + 1
@@ -502,3 +505,97 @@ class Test6NFTransactionBackedWithHistoryModel(TestCase):
                 is False
             )
             # end this is ProductStockQuantity
+
+    def test_create_or_update_if_different(self):
+        t1 = Transaction.objects.create()
+
+        brand_new = TProduct.objects.create(
+            business_identifier="brand new product", transaction=t1
+        )
+
+        # regular value
+
+        ## regular value -- create
+        new_name = "brand new product"
+        name, created, different = ProductName.objects.create_or_update_if_different(
+            anchor=brand_new, new_value=new_name, txn_instance=t1
+        )
+        assert created is True
+        assert name.value == new_name
+        assert different is None
+        assert name.transaction == t1
+
+        ## regular value -- update if different
+        t2 = Transaction.objects.create()
+        new_name = "newer brand new product"
+
+        name, created, different = ProductName.objects.create_or_update_if_different(
+            anchor=brand_new, new_value=new_name, txn_instance=t2
+        )
+        assert created is False
+        assert name.value == new_name
+        assert different is True
+        assert name.transaction == t2
+
+        ## regular value -- don't update since same
+        t3 = Transaction.objects.create()
+
+        name, created, different = ProductName.objects.create_or_update_if_different(
+            anchor=brand_new, new_value=new_name, txn_instance=t3
+        )
+        assert created is False
+        assert name.value == new_name
+        assert different is False
+        assert name.transaction == t2
+
+        # fk
+
+        t4 = Transaction.objects.create()
+
+        ## fk -- create
+        biz = TBusiness(business_identifier="biz", transaction=t4)
+        biz.save(transaction=t4)
+
+        (
+            seller,
+            created,
+            different,
+        ) = ProductHasSeller.objects.create_or_update_if_different(
+            anchor=brand_new, new_value=biz, txn_instance=t4
+        )
+        assert created is True
+        assert seller.value == biz
+        assert different is None
+        assert seller.transaction == t4
+
+        ## fk -- update if different
+        t5 = Transaction.objects.create()
+        new_biz = TBusiness(business_identifier="new_biz", transaction=t5)
+        new_biz.save(transaction=t5)
+
+        (
+            seller,
+            created,
+            different,
+        ) = ProductHasSeller.objects.create_or_update_if_different(
+            anchor=brand_new, new_value=new_biz, txn_instance=t5
+        )
+        assert created is False
+        assert seller.value == new_biz
+        assert different is True
+        assert seller.transaction == t5
+
+        ## fk -- don't update since same
+        t6 = Transaction.objects.create()
+
+        (
+            seller,
+            created,
+            different,
+        ) = ProductHasSeller.objects.create_or_update_if_different(
+            anchor=brand_new, new_value=new_biz, txn_instance=t6
+        )
+        assert created is False
+        assert seller.value == new_biz
+        assert different is False
+        assert seller.transaction == t5

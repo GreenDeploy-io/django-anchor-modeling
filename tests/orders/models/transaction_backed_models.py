@@ -57,3 +57,23 @@ class WithFKThatSetRelatedName(TransactionBackedAnchorWithBusinessId):
     some_fk = models.ForeignKey(
         TProduct, on_delete=models.CASCADE, related_name="some_product"
     )
+
+
+class TBusiness(TransactionBackedAnchorWithBusinessId):
+    pass
+
+
+AbstractProductHasSeller = transaction_backed_static_attribute(
+    anchor_class=TProduct,
+    value_type=models.ForeignKey(
+        TBusiness,
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
+    ),
+    related_name="seller",
+)
+
+
+@historize_model
+class ProductHasSeller(AbstractProductHasSeller):
+    pass

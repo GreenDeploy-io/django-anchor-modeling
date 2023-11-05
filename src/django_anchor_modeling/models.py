@@ -1,3 +1,4 @@
+import sys
 from types import new_class
 from typing import List, Union
 
@@ -10,6 +11,8 @@ from django.core.validators import RegexValidator
 from django.db import models
 from django.db import transaction as db_transaction
 from django.db.utils import IntegrityError
+
+from django_anchor_modeling import config, constants
 
 from .exceptions import (
     CannotReuseExistingTransactionError,
@@ -529,7 +532,9 @@ class AnchorNoBusinessId(ZeroUpdateStrategyModel):
 # See https://en.wikipedia.org/wiki/Sentinel_value for more details
 # Here, it's used to represent a NULL Transaction because we don't allow
 # NULL values for the foreignkey Transaction field in TransactionBackedModel
-SENTINEL_NULL_TRANSACTION_ID = getattr(settings, "SENTINEL_NULL_TRANSACTION_ID", 1)
+SENTINEL_NULL_TRANSACTION_ID = getattr(
+    settings, "SENTINEL_NULL_TRANSACTION_ID", constants.SENTINEL_NULL_TRANSACTION_ID
+)
 
 
 class Transaction(CreatedModel, UndeletableModel):
@@ -537,10 +542,75 @@ class Transaction(CreatedModel, UndeletableModel):
     def get_sentinel(cls):
         return cls.objects.get_or_create(pk=SENTINEL_NULL_TRANSACTION_ID)[0]
 
+    @classmethod
+    def get_sentinel_id(cls):
+        """
+        make this callable so that it can be used in migrations as default
+        """
+        return SENTINEL_NULL_TRANSACTION_ID
+
 
 class TransactionBackedManager(models.Manager):
     def get_queryset(self):
         return TransactionBackedQuerySet(self.model, using=self._db)
+
+
+class TransactionBackedAttributeManager(TransactionBackedManager):
+    def create_or_update_if_different(self, anchor, new_value, txn_instance):
+        with db_transaction.atomic():
+            obj, created = self.model.objects.select_for_update().get_or_create(
+                anchor=anchor,
+                defaults={"transaction": txn_instance, "value": new_value},
+            )
+
+            if created:
+                return obj, True, None
+
+            # From this point,
+            # either updated because value is different or not updated
+            # obj, created, different meaning instance, boolean, boolean
+            # return (obj, False, True), or (obj, False, False)
+
+            # Check if 'value' is a ForeignKey by checking for 'value_id' attribute.
+            # If 'value_id' doesn't exist, it means 'value' is a normal field.
+            is_foreignkey = hasattr(obj, "value_id")
+
+            # Extract the current value accordingly.
+            current_value = obj.value_id if is_foreignkey else obj.value
+
+            different_foreignkey = different_value = different = False
+
+            # Check if the new value is different from the current one.
+            if is_foreignkey:
+                current_value = obj.value_id
+                different = current_value != new_value.id
+                different_foreignkey = different
+            else:
+                current_value = obj.value
+                different = current_value != new_value
+                different_value = different
+
+            # For ForeignKey, compare IDs; otherwise, compare the values directly.
+            if different_foreignkey:
+                obj.value_id = new_value.id
+                obj.save(
+                    update_fields=[
+                        "value_id",
+                        "transaction",
+                    ],
+                    transaction=txn_instance,
+                )
+            elif different_value:
+                obj.value = new_value
+                obj.save(
+                    update_fields=[
+                        "value",
+                        "transaction",
+                    ],
+                    transaction=txn_instance,
+                )
+
+            return obj, created, different
 
 
 class TransactionBackedQuerySet(models.QuerySet):
@@ -793,7 +863,7 @@ class TransactionBackedModel(models.Model):
     transaction = models.ForeignKey(
         Transaction,
         on_delete=models.SET(Transaction.get_sentinel),
-        default=Transaction.get_sentinel,
+        default=Transaction.get_sentinel_id,
     )
     objects = TransactionBackedManager()
 
@@ -895,6 +965,69 @@ class TransactionBackedModel(models.Model):
                 )
 
 
+class TieManager(TransactionBackedManager):
+    def get_far_side_by_near_side(
+        self,
+        near_side_instance,
+        tie_has_near_side_class,
+        far_side_class,
+        far_side_related_query_name,
+        additional_tie_has_near_side_filter_params=None,
+    ):
+        """
+        Get the far side instance based on the near side instance and the far side class.
+
+        Args:
+            near_side_instance: The near side instance.
+            far_side_class: The far side class.
+
+        Returns:
+            The far side instance.
+        """
+        # # Step 1: Fetch the IDs of RequirementIsUnderTie instances that are related to the given Requirement instance
+        # # and have a requirement_partner set to BUSINESS_EVENT
+        # tie_as_anchor_ids = TieHasRequirement.objects.filter(
+        #     value=requirement_instance,  # Filter by the specific Requirement instance
+        #     anchor__requirement_partner=RequirementIsUnderTie.PartnerChoices.BUSINESS_EVENT  # Filter by requirement_partner
+        # ).values_list('anchor_id', flat=True)  # Extract just the IDs into a flat list
+
+        # # Step 2: Fetch BusinessEvent instances that are related to the RequirementIsUnderTie instances obtained in Step 1
+        # business_events = BusinessEvent.objects.filter(
+        #     has_ties_to_requirement__anchor_id__in=tie_as_anchor_ids  # Filter by the IDs obtained in Step 1
+        # )
+
+        # Step 1: Fetch the IDs of TieHasFixedNearSide instances that are related to the given Requirement instance
+        tie_as_anchor_ids = tie_has_near_side_class.objects.filter(
+            value=near_side_instance,  # Filter by the specific near_side instance
+            **additional_tie_has_near_side_filter_params,
+        ).values_list(
+            "anchor_id", flat=True
+        )  # Extract just the IDs into a flat list
+
+        # Step 2: Fetch FarSide instances that are related to the self.model (Tie) instances obtained in Step 1
+        # Dynamically create the filter keyword argument and using the ids in Step 1
+        far_side_filter_kwargs = {
+            f"{far_side_related_query_name}__anchor_id__in": tie_as_anchor_ids
+        }
+        return far_side_class.objects.filter(**far_side_filter_kwargs)
+
+
+class TransactionBackedTie(TransactionBackedModel):
+    # keys is the related_name
+    # values is a single related class, or a list of related classes
+    # requirement: Requirement
+    # is_under_generic: [BusinessEvent, BusinessUseCase]
+    anchors = {}
+
+    # values is the keys in anchors
+    unique_anchors = []
+
+    objects = TieManager()
+
+    class Meta:
+        abstract = True
+
+
 class HistorizedModelMap(models.Model):
     active_model = models.OneToOneField(
         ContentType, related_name="historized_map_active", on_delete=models.CASCADE
@@ -949,16 +1082,39 @@ def _generate_history_field(original_model, field):
     # Deep copy the field to avoid altering the original
     field = copy.deepcopy(field)
 
-    # Check if the field is a ForeignKey
-    if isinstance(field, models.ForeignKey):
-        if related_name := getattr(field, "_related_name", None):
-            field._related_name = f"historized_{related_name}"
-        if related_query_name := getattr(field, "_related_query_name", None):
-            field._related_query_name = f"historized_{related_query_name}"
-
-    getattr(field, "swappable", None)
+    swappable = getattr(field, "swappable", constants.UNSET)
     field.swappable = False
+    cls, args, kwargs = _get_field_construction(field)
+    field = cls(*args, **kwargs)
+
+    if swappable is not constants.UNSET:
+        field.swappable = swappable
+
     return field
+
+
+def _get_field_construction(field):
+    _, _, args, kwargs = field.deconstruct()
+
+    if isinstance(field, models.ForeignKey):
+        default = config.foreign_key_field()
+    else:
+        default = config.field()
+
+    kwargs.update(default.kwargs)
+
+    cls = field.__class__
+    if isinstance(field, models.OneToOneField) and field.primary_key is False:
+        cls = models.ForeignKey
+    elif isinstance(field, models.FileField):
+        kwargs.pop("primary_key", None)
+
+    for field_class, exclude_kwargs in config.exclude_field_kwargs().items():
+        if isinstance(field, field_class):
+            for exclude_kwarg in exclude_kwargs:
+                kwargs.pop(exclude_kwarg, None)
+
+    return cls, args, kwargs
 
 
 def create_historized_model(original_model):
@@ -1010,7 +1166,12 @@ def create_historized_model(original_model):
     }
 
     # Create the new model class dynamically
-    return type(model_name, (Historized,), class_attrs)
+    history_model = type(model_name, (Historized,), class_attrs)
+
+    # if not abstract:
+    setattr(sys.modules[models_module], model_name, history_model)
+
+    return history_model
 
 
 from django.db import models
@@ -1022,7 +1183,7 @@ class Historized(models.Model):
         Transaction,
         on_delete=models.DO_NOTHING,
         db_constraint=False,
-        default=Transaction.get_sentinel,
+        default=Transaction.get_sentinel_id,
         related_name="created_%(app_label)s_%(class)ss",
         related_query_name="that_created_%(app_label)s_%(class)ss",
     )
@@ -1030,7 +1191,7 @@ class Historized(models.Model):
         Transaction,
         on_delete=models.DO_NOTHING,
         db_constraint=False,
-        default=Transaction.get_sentinel,
+        default=Transaction.get_sentinel_id,
         related_name="deactivated_%(app_label)s_%(class)ss",
         related_query_name="that_deactivated_%(app_label)s_%(class)ss",
     )
@@ -1271,7 +1432,7 @@ def transaction_backed_static_attribute(
         )
         value = value_type
 
-        objects = TransactionBackedManager()
+        objects = TransactionBackedAttributeManager()
 
         class Meta:
             abstract = True
