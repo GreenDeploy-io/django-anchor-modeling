@@ -327,7 +327,7 @@ class FromModel(ZeroUpdateStrategyModel):
         abstract = True
 
 
-def historized_attribute(anchor_class, value_type, related_name="%(class)s_related"):
+def historized_attribute(anchor_class, value_type, related_name="%(class)s_set"):
     """
     A factory function that generates an abstract base class model for historized attributes.
 
@@ -369,7 +369,7 @@ def historized_attribute(anchor_class, value_type, related_name="%(class)s_relat
     return HistorizedAttribute
 
 
-def static_attribute(anchor_class, value_type, related_name="%(class)s_related"):
+def static_attribute(anchor_class, value_type, related_name="%(class)s_set"):
     """
     A factory function that generates a model for static attributes.
 
@@ -1386,7 +1386,7 @@ class Knot(UndeletableModel):
 
 
 def transaction_backed_static_attribute(
-    anchor_class, value_type, related_name="%(class)s_related"
+    anchor_class, value_type, related_name="%(class)s_set"
 ):
     """
     A factory function that generates a model for static attributes.
