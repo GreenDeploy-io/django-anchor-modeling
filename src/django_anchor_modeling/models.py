@@ -733,6 +733,10 @@ class TransactionBackedQuerySet(models.QuerySet):
         self,
         objs: List[models.Model],
         batch_size=None,
+        ignore_conflicts=False,
+        update_conflicts=False,
+        update_fields=None,
+        unique_fields=None,
         transaction: Union[int, "Transaction"] = None,
     ):
         """
@@ -744,7 +748,20 @@ class TransactionBackedQuerySet(models.QuerySet):
         for obj in objs:
             obj.transaction_id = transaction_id
 
-        super(TransactionBackedQuerySet, self).bulk_create(objs, batch_size=batch_size)
+        super_result = super(TransactionBackedQuerySet, self).bulk_create(
+            objs,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
+
+        if super_result is not None:
+            # Now handle the historizing
+            update_historized_on_bulk_create(super_result, transaction=transaction)
+
+        return super_result
 
     def bulk_update(
         self,
@@ -769,7 +786,7 @@ class TransactionBackedQuerySet(models.QuerySet):
         for obj in objs:
             obj.transaction_id = transaction_id
 
-        super(TransactionBackedQuerySet, self).bulk_update(
+        return super(TransactionBackedQuerySet, self).bulk_update(
             objs, fields + ["transaction_id"], batch_size=batch_size
         )
 
@@ -839,6 +856,45 @@ def update_historized_on_save(instance, sender=None, *args, **kwargs):
 
         # Save the new historized instance
         historized_instance.save()
+
+
+@db_transaction.atomic
+def update_historized_on_bulk_create(objs, transaction=None):
+    if not objs:
+        return
+
+    sender = objs[0].__class__
+    historized_model = get_historized_model_for(sender)
+    if historized_model is None:
+        return
+
+    new_historized_records = []
+    for obj in objs:
+        # updated_record is dict
+        the_active_pk = obj.pk
+        # Create a new historized instance
+        new_historized_instance = historized_model(
+            on_txn_id=transaction.id,
+            off_txn=Transaction.get_sentinel(),
+            original_id=the_active_pk,
+        )
+
+        # Copy fields from the original instance
+        for field in obj._meta.fields:
+            if field.name in [
+                "transaction_id",
+                "id",
+                "pk",
+                "transaction",
+            ]:  # Skip transaction_id as we set it explicitly
+                continue
+
+            setattr(new_historized_instance, field.name, getattr(obj, field.name))
+
+        new_historized_records.append(new_historized_instance)
+
+    # Bulk create historized instances
+    historized_model.objects.bulk_create(new_historized_records)
 
 
 @db_transaction.atomic

@@ -300,9 +300,14 @@ class TestDataViewerModel(TestCase):
                 }
             ]
 
-    def test_get_children_as_list_and_str(self):
+    def test_get_children_as_list_and_str_field_processors(self):
         """
         get back the parents as comma-delimited str of names and list
+        test the 4 ways field_processors can handle:
+        1. single related field, no condition
+        2. single related field, condition (hasattr: present and absent)
+        3. many related objects, return dict
+        4. many related objects, return comma delimited string
         """
         t1 = Transaction.objects.create()
         self.p1 = Parent.objects.create(transaction=t1)
@@ -356,34 +361,23 @@ class TestDataViewerModel(TestCase):
                 # "parentparent_set__anchor__name__value",
             ],
             field_processors={
-                "id": {
-                    "field": "id",
-                    # "condition": "hasattr",
-                    # "attribute": "quotation",
-                    # "sub_field": "value.display_quotation_number"
-                },
-                "business_identifier": {
-                    "field": "business_identifier",
-                },
+                "id": {"full_path_to_single": "id"},
+                "business_identifier": {"full_path_to_single": "business_identifier"},
                 "name": {
-                    "field": "name",
-                    "condition": "hasattr",
-                    "attribute": "name",
-                    "sub_field": "value",
+                    "full_path_to_single": "name.value",
+                    "conditions": {"hasattr": "name"},
+                },
+                "non_existent_field": {
+                    "full_path_to_single": "non_existent",
+                    "conditions": {"hasattr": "non_existent"},
                 },
                 "parents": {
-                    "field": "parentparent_set",
-                    "attributes": {
-                        "id": "anchor.id",
-                        "name": "anchor.name.value",
-                    },
+                    "path_to_many": "parentparent_set",
+                    "return_dict": {"id": "anchor.id", "name": "anchor.name.value"},
                 },
-                "parent_names_string": {
-                    "field": "parentparent_set",
-                    "attributes": {
-                        "name": "anchor.name.value",
-                    },
-                    "format": "string",  # This will return a comma-delimited string
+                "parent_names": {
+                    "path_to_many": "parentparent_set",
+                    "return_string": "anchor.name.value",
                 },
             },
         )
@@ -424,6 +418,7 @@ class TestDataViewerModel(TestCase):
                 "id": self.gp0.id,
                 "business_identifier": self.gp0.business_identifier,
                 "name": self.gp0.name.value,
+                "non_existent_field": None,
                 "parents": [
                     {
                         "id": self.p0.id,
@@ -434,5 +429,6 @@ class TestDataViewerModel(TestCase):
                         "name": self.p1.name.value,
                     },
                 ],
+                "parent_names": f"{self.p0.name.value}, {self.p1.name.value}",
             }
         ]

@@ -18,5 +18,10 @@
       "--per-file-ignores=**/__init__.py:F401"
   ],
   "prettier.trailingComma": "none",
-  "python.envFile": "${workspaceFolder}/.env"
+  "python.envFile": "${workspaceFolder}/.env",
+  "[json][python]": {
+    "editor.codeActionsOnSave": {
+      "source.fixAll": "explicit"
+    }
+  }
 }

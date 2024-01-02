@@ -26,52 +26,73 @@ class QueryHelpers:
         }
 
     @staticmethod
-    def apply_field_processor_rule(instance, field, rule):
+    def apply_field_processor_rule(instance, rule):
         """
         Apply a field processing rule to an instance.
         """
-        import ipdb
+        if "full_path_to_single" in rule:
+            if "conditions" in rule:
+                return QueryHelpers.process_conditions(
+                    instance, rule["full_path_to_single"], rule["conditions"]
+                )
+            return QueryHelpers.get_nested_attr(instance, rule["full_path_to_single"])
 
-        ipdb.set_trace()
-        # Extract the actual field to process from the rule
-        actual_field = rule.get("field", field)
+        if "path_to_many" in rule:
+            if "return_dict" in rule:
+                return QueryHelpers.process_many_relations(
+                    instance, rule["path_to_many"], rule["return_dict"], "dict"
+                )
+            if "return_string" in rule:
+                return QueryHelpers.process_many_relations(
+                    instance, rule["path_to_many"], rule["return_string"], "string"
+                )
 
-        # Handle processing for nested attributes (like 'parents')
-        if "attributes" in rule:
-            # Check if a condition is specified and met
-            if rule.get("condition") == "hasattr" and not hasattr(
-                instance, actual_field
-            ):
-                return []
+        return None
 
-            related_objects = getattr(instance, actual_field, None)
+    @staticmethod
+    def process_conditions(instance, path, conditions):
+        """
+        Process conditions for a given path.
+        """
+        for condition, value in conditions.items():
+            if condition == "hasattr" and not hasattr(instance, value):
+                return None
+        return QueryHelpers.get_nested_attr(instance, path)
 
-            if related_objects is None:
-                return []
+    @staticmethod
+    def process_many_relations(instance, primary_path, sub_fields, output_format):
+        """
+        Process many related objects and return the specified output format.
+        """
+        related_objects = getattr(instance, primary_path, None)
+        if related_objects is None:
+            return []
 
-            output_format = rule.get("format", "dict")
+        if output_format == "dict":
+            return [
+                {
+                    key: QueryHelpers.get_nested_attr(item, path)
+                    for key, path in sub_fields.items()
+                }
+                for item in related_objects.all()
+            ]
 
-            return QueryHelpers.process_nested_relations(
-                related_objects, rule["attributes"], output_format=output_format
-            )
+        if output_format == "string":
+            values = [
+                str(QueryHelpers.get_nested_attr(item, sub_fields))
+                for item in related_objects.all()
+            ]
+            return ", ".join(filter(None, values))
 
-        # Check for special condition (like 'hasattr')
-        elif rule.get("condition") == "hasattr":
-            attr = getattr(instance, rule.get("attribute"), None)
-            return (
-                getattr(attr, rule.get("sub_field"), None) if attr is not None else None
-            )
-
-        # Handle direct attribute
-        else:
-            return QueryHelpers.get_nested_attr(
-                instance, rule.get("attribute", actual_field)
-            )
+        return []
 
     @staticmethod
     def process_instance(instance, field_processor_rules):
+        """
+        Process an instance with given field processing rules.
+        """
         return {
-            field: QueryHelpers.apply_field_processor_rule(instance, field, rule)
+            field: QueryHelpers.apply_field_processor_rule(instance, rule)
             for field, rule in field_processor_rules.items()
         }
 
