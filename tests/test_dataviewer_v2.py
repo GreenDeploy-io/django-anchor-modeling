@@ -126,20 +126,13 @@ class TestDataViewerModel(TestCase):
                     # "parent_set__child_set__grandchild_set__name__value",
                 ],
                 field_processors={
-                    "id": {
-                        "field": "id",
-                        # "condition": "hasattr",
-                        # "attribute": "quotation",
-                        # "sub_field": "value.display_quotation_number"
-                    },
+                    "id": {"full_path_to_single": "id"},
                     "business_identifier": {
-                        "field": "business_identifier",
+                        "full_path_to_single": "business_identifier"
                     },
                     "name": {
-                        "field": "name",
-                        "condition": "hasattr",
-                        "attribute": "name",
-                        "sub_field": "value",
+                        "full_path_to_single": "name.value",
+                        "conditions": {"hasattr": "name"},
                     },
                 },
             )
@@ -287,6 +280,7 @@ class TestDataViewerModel(TestCase):
                 print(query)  # Or perform your assertions here
 
             processed_list = []
+            # sourcery skip: no-loop-in-tests
             for grandparent in grandparents:
                 processed = QueryHelpers.process_instance(
                     grandparent, bdmap.field_processors
